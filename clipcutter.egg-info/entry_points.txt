@@ -1,0 +1,2 @@
+[console_scripts]
+clipcutter = clipcutter.cli:cli
