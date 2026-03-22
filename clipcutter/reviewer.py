@@ -9,6 +9,7 @@ from typing import Optional
 
 import click
 
+from clipcutter.clipper import format_duration
 from clipcutter.config import DIR_CLIPS, DIR_KEPT, DIR_METADATA, DIR_PENDING
 from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_status
 from clipcutter.models import ClipMetadata
@@ -74,7 +75,7 @@ def review_clips(output_dir: Path, player: str = "auto",
         click.echo("━" * 45)
         click.echo(f"  Clip {i}/{len(review_items)} from {source_video}")
         click.echo(f"  File: {clip.filename}")
-        click.echo(f"  Time: {_fmt(clip.start_time)} - {_fmt(clip.end_time)} ({clip.duration:.0f}s)")
+        click.echo(f"  Time: {format_duration(clip.start_time)} - {format_duration(clip.end_time)} ({clip.duration:.0f}s)")
         click.echo(f"  Detected: {', '.join(clip.detection_reasons)}")
         click.echo(f"  Confidence: {clip.confidence:.2f}")
         click.echo("━" * 45)
@@ -167,8 +168,3 @@ def _cleanup_empty_dirs(pending_dir: Path) -> None:
             d.rmdir()
 
 
-def _fmt(seconds: float) -> str:
-    """Format seconds as MM:SS."""
-    m = int(seconds) // 60
-    s = int(seconds) % 60
-    return f"{m:02d}:{s:02d}"

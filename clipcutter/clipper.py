@@ -101,7 +101,10 @@ def _split_long_clip(clip: ClipBoundary,
         highlights=left_highlights,
     )
     if left.duration >= config.CLIP_MIN_LENGTH_SECONDS:
-        result.append(left)
+        if left.duration > config.CLIP_MAX_LENGTH_SECONDS:
+            result.extend(_split_long_clip(left, video_duration))
+        else:
+            result.append(left)
 
     right = ClipBoundary(
         start_time=right_start,
@@ -109,7 +112,6 @@ def _split_long_clip(clip: ClipBoundary,
         highlights=right_highlights,
     )
     if right.duration >= config.CLIP_MIN_LENGTH_SECONDS:
-        # Recursively split if still too long
         if right.duration > config.CLIP_MAX_LENGTH_SECONDS:
             result.extend(_split_long_clip(right, video_duration))
         else:
@@ -191,11 +193,18 @@ def format_timestamp(seconds: float) -> str:
     return f"{m:02d}m{s:02d}s"
 
 
+def format_duration(seconds: float) -> str:
+    """Format seconds as MM:SS (e.g., 02:30)."""
+    m = int(seconds) // 60
+    s = int(seconds) % 60
+    return f"{m:02d}:{s:02d}"
+
+
 def extract_clips(video_path: Path, boundaries: List[ClipBoundary],
                   output_dir: Path) -> List[ClipMetadata]:
     """Extract all clips from video and return metadata."""
     video_stem = video_path.stem
-    clip_dir = output_dir / "clips" / "pending" / video_stem
+    clip_dir = output_dir / config.DIR_CLIPS / config.DIR_PENDING / video_stem
     clip_dir.mkdir(parents=True, exist_ok=True)
 
     metadata_list = []

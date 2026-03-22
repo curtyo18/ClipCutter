@@ -2,7 +2,6 @@
 
 # Audio extraction
 AUDIO_SAMPLE_RATE = 22050  # Hz
-AUDIO_MONO = True
 
 # Feature computation
 HOP_LENGTH = 512           # ~23ms per frame at 22050 Hz

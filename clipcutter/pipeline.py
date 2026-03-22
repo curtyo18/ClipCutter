@@ -13,9 +13,10 @@ from clipcutter.clipper import (
     compute_clip_boundaries,
     compute_fallback_clip,
     extract_clips,
+    format_duration,
     trim_silence,
 )
-from clipcutter.config import AUDIO_SAMPLE_RATE, VIDEO_EXTENSIONS
+from clipcutter.config import AUDIO_SAMPLE_RATE, DIR_CLIPS, DIR_METADATA, DIR_PENDING, VIDEO_EXTENSIONS
 from clipcutter.detector import detect_highlights
 from clipcutter.features import compute_features
 from clipcutter.metadata import save_metadata
@@ -39,8 +40,8 @@ def process_video(video_path: Path, output_dir: Path,
     click.echo(f"  Analyzing: {video_path.name}")
 
     # Check for existing clips
-    existing_clip_dir = output_dir / "clips" / "pending" / video_path.stem
-    existing_meta = output_dir / "metadata" / f"{video_path.stem}_clips.json"
+    existing_clip_dir = output_dir / DIR_CLIPS / DIR_PENDING / video_path.stem
+    existing_meta = output_dir / DIR_METADATA / f"{video_path.stem}_clips.json"
     if existing_clip_dir.exists() and any(existing_clip_dir.iterdir()):
         if overwrite:
             pass  # proceed to cleanup below
@@ -57,7 +58,7 @@ def process_video(video_path: Path, output_dir: Path,
 
     # Get video duration
     video_duration = get_video_duration(video_path)
-    click.echo(f"  Duration: {_format_duration(video_duration)}")
+    click.echo(f"  Duration: {format_duration(video_duration)}")
 
     # Extract audio to temp directory
     temp_dir = Path(tempfile.mkdtemp(prefix="clipcutter_"))
@@ -86,7 +87,7 @@ def process_video(video_path: Path, output_dir: Path,
             for h in highlights:
                 click.echo(
                     f"    {h.detection_type.value} at "
-                    f"{_format_duration(h.timestamp)} "
+                    f"{format_duration(h.timestamp)} "
                     f"(confidence: {h.confidence:.2f})"
                 )
         else:
@@ -104,8 +105,8 @@ def process_video(video_path: Path, output_dir: Path,
         click.echo(f"  {len(boundaries)} clip(s) to extract:")
         for i, b in enumerate(boundaries, 1):
             click.echo(
-                f"    Clip {i}: {_format_duration(b.start_time)} - "
-                f"{_format_duration(b.end_time)} "
+                f"    Clip {i}: {format_duration(b.start_time)} - "
+                f"{format_duration(b.end_time)} "
                 f"({b.duration:.0f}s) [{', '.join(b.detection_reasons)}]"
             )
 
@@ -118,7 +119,7 @@ def process_video(video_path: Path, output_dir: Path,
         clip_metas = extract_clips(video_path, boundaries, output_dir)
 
         # Save metadata
-        meta_path = save_metadata(clip_metas, video_path.name, output_dir)
+        meta_path = save_metadata(clip_metas, str(video_path), output_dir)
         click.echo(f"  Metadata saved: {meta_path}")
 
         return clip_metas
@@ -163,12 +164,5 @@ def process_directory(input_dir: Path, output_dir: Path,
 
     click.echo(f"Done. {total_clips} clip(s) extracted from {len(video_files)} video(s).")
     if not dry_run and total_clips > 0:
-        click.echo(f"Clips saved to: {output_dir / 'clips' / 'pending'}")
+        click.echo(f"Clips saved to: {output_dir / DIR_CLIPS / DIR_PENDING}")
         click.echo(f"Run 'clipcutter review -o {output_dir}' to review.")
-
-
-def _format_duration(seconds: float) -> str:
-    """Format seconds as MM:SS."""
-    m = int(seconds) // 60
-    s = int(seconds) % 60
-    return f"{m:02d}:{s:02d}"
