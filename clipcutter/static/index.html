@@ -160,6 +160,51 @@
   .btn-skip { background: #333; color: #ccc; }
   .btn-discard { background: #7f1d1d; color: #fff; }
 
+  /* ---- Trim controls ---- */
+  .trim-section {
+    padding: 0 24px 16px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .trim-label { font-size: 12px; color: #888; font-weight: 500; }
+  .trim-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .trim-time {
+    font-family: 'Consolas', 'SF Mono', monospace;
+    font-size: 14px;
+    color: #fff;
+    background: #0f0f0f;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 6px 10px;
+    width: 70px;
+    text-align: center;
+    outline: none;
+  }
+  .trim-time:focus { border-color: #60a5fa; }
+  .trim-btn {
+    padding: 6px 10px;
+    background: #2a2a2a;
+    color: #aaa;
+    border: 1px solid #333;
+    border-radius: 6px;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+  .trim-btn:hover { background: #333; color: #fff; }
+  .trim-indicator {
+    margin-left: auto;
+    font-size: 12px;
+    color: #666;
+  }
+  .trim-indicator.active { color: #fbbf24; }
+
   .progress { display: flex; gap: 4px; margin-bottom: 20px; height: 3px; }
   .progress-dot { flex: 1; border-radius: 2px; background: #2a2a2a; transition: background 0.3s; }
   .progress-dot.done { background: #166534; }
@@ -216,6 +261,29 @@
   }
   .cleanup-total { margin-top: 16px; text-align: right; font-size: 13px; color: #888; }
 
+  /* ---- Overlay spinner ---- */
+  .overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .overlay.active { display: flex; }
+  .spinner {
+    width: 40px; height: 40px;
+    border: 4px solid #333;
+    border-top-color: #60a5fa;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .overlay-text { color: #ccc; font-size: 15px; font-weight: 500; }
+
   .keyboard-hint { text-align: center; font-size: 12px; color: #555; padding-top: 8px; }
   kbd {
     display: inline-block; padding: 2px 6px; background: #222;
@@ -225,6 +293,11 @@
 </style>
 </head>
 <body>
+
+<div class="overlay" id="overlay">
+  <div class="spinner"></div>
+  <div class="overlay-text" id="overlayText">Trimming...</div>
+</div>
 
 <div class="header">
   <h1>ClipCutter</h1>
@@ -419,6 +492,21 @@ function showClip() {
           <div class="confidence-fill" style="width:${confPercent}%;background:${confColor}"></div>
         </div>
       </div>
+      <div class="trim-section">
+        <div class="trim-group">
+          <span class="trim-label">In</span>
+          <input type="text" class="trim-time" id="trimIn" value="0:00" />
+          <button class="trim-btn" onclick="setTrimPoint('in')">Set</button>
+          <button class="trim-btn" onclick="seekTo('in')">Go</button>
+        </div>
+        <div class="trim-group">
+          <span class="trim-label">Out</span>
+          <input type="text" class="trim-time" id="trimOut" value="${fmtTimePrecise(clip.duration)}" />
+          <button class="trim-btn" onclick="setTrimPoint('out')">Set</button>
+          <button class="trim-btn" onclick="seekTo('out')">Go</button>
+        </div>
+        <span class="trim-indicator" id="trimIndicator"></span>
+      </div>
       <div class="actions">
         <button class="btn btn-keep" onclick="clipAction('keep')">
           Keep <span class="shortcut">K</span>
@@ -432,16 +520,90 @@ function showClip() {
       </div>
     </div>
     <div class="keyboard-hint">
-      <kbd>K</kbd> keep &nbsp; <kbd>S</kbd> skip &nbsp; <kbd>D</kbd> discard &nbsp; <kbd>Space</kbd> play/pause
+      <kbd>K</kbd> keep &nbsp; <kbd>S</kbd> skip &nbsp; <kbd>D</kbd> discard &nbsp; <kbd>Space</kbd> play/pause &nbsp; <kbd>I</kbd> set in &nbsp; <kbd>O</kbd> set out
     </div>
   `;
+}
+
+// ---- Trim helpers ----
+function fmtTimePrecise(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  const ms = Math.round((seconds % 1) * 10);
+  return `${m}:${String(s).padStart(2, '0')}.${ms}`;
+}
+
+function parseTrimTime(str) {
+  const parts = str.trim().split(':');
+  if (parts.length === 2) {
+    return parseInt(parts[0]) * 60 + parseFloat(parts[1]);
+  }
+  return parseFloat(str) || 0;
+}
+
+function setTrimPoint(which) {
+  const player = document.getElementById('player');
+  if (!player) return;
+  const time = player.currentTime;
+  const input = document.getElementById(which === 'in' ? 'trimIn' : 'trimOut');
+  input.value = fmtTimePrecise(time);
+  updateTrimIndicator();
+}
+
+function seekTo(which) {
+  const player = document.getElementById('player');
+  if (!player) return;
+  const input = document.getElementById(which === 'in' ? 'trimIn' : 'trimOut');
+  player.currentTime = parseTrimTime(input.value);
+}
+
+function updateTrimIndicator() {
+  const clip = clips[currentIndex];
+  if (!clip) return;
+  const inVal = parseTrimTime(document.getElementById('trimIn').value);
+  const outVal = parseTrimTime(document.getElementById('trimOut').value);
+  const indicator = document.getElementById('trimIndicator');
+  const trimmed = inVal > 0.1 || (clip.duration - outVal) > 0.1;
+  if (trimmed) {
+    const newDur = Math.max(0, outVal - inVal);
+    indicator.textContent = `Trimmed: ${newDur.toFixed(1)}s`;
+    indicator.className = 'trim-indicator active';
+  } else {
+    indicator.textContent = '';
+    indicator.className = 'trim-indicator';
+  }
+}
+
+function showOverlay(text) {
+  document.getElementById('overlayText').textContent = text;
+  document.getElementById('overlay').classList.add('active');
+}
+function hideOverlay() {
+  document.getElementById('overlay').classList.remove('active');
 }
 
 async function clipAction(type) {
   const clip = clips[currentIndex];
 
   if (type === 'keep') {
-    await fetch(`/api/clips/${clip.video_stem}/${clip.filename}/keep`, {method: 'POST'});
+    const trimStart = parseTrimTime(document.getElementById('trimIn')?.value || '0');
+    const trimEnd = parseTrimTime(document.getElementById('trimOut')?.value || '0');
+    const needsTrim = trimStart > 0.1 || (clip.duration - trimEnd) > 0.1;
+
+    if (needsTrim) showOverlay('Trimming clip...');
+
+    const body = {trim_start: trimStart, trim_end: trimEnd};
+    const res = await fetch(`/api/clips/${clip.video_stem}/${clip.filename}/keep`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    hideOverlay();
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.detail || 'Keep failed');
+      return;
+    }
     results[currentIndex] = 'kept';
   } else if (type === 'discard') {
     await fetch(`/api/clips/${clip.video_stem}/${clip.filename}/discard`, {method: 'POST'});
@@ -545,6 +707,11 @@ fetch('/api/defaults').then(r => r.json()).then(data => {
   document.getElementById('folderPath').value = data.folder;
 });
 
+// Update trim indicator when inputs change
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'trimIn' || e.target.id === 'trimOut') updateTrimIndicator();
+});
+
 // ---- Keyboard shortcuts (only active on Review tab) ----
 document.addEventListener('keydown', (e) => {
   if (activeTab !== 'review') return;
@@ -555,6 +722,8 @@ document.addEventListener('keydown', (e) => {
     case 'k': e.preventDefault(); clipAction('keep'); break;
     case 'd': e.preventDefault(); clipAction('discard'); break;
     case 's': e.preventDefault(); clipAction('skip'); break;
+    case 'i': e.preventDefault(); setTrimPoint('in'); break;
+    case 'o': e.preventDefault(); setTrimPoint('out'); break;
     case ' ':
       e.preventDefault();
       const player = document.getElementById('player');

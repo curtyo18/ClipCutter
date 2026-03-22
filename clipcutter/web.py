@@ -1,7 +1,9 @@
 """Web UI for clip processing and review."""
 
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import Optional
@@ -20,6 +22,11 @@ class ProcessRequest(BaseModel):
     folder: str
     sensitivity: float = 1.0
     context: Optional[float] = None
+
+
+class KeepRequest(BaseModel):
+    trim_start: float = 0.0
+    trim_end: float = 0.0
 
 
 class ProcessingState:
@@ -239,7 +246,7 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
         return FileResponse(clip_path, media_type="video/mp4")
 
     @app.post("/api/clips/{video_stem}/{filename}/keep")
-    def keep_clip(video_stem: str, filename: str):
+    def keep_clip(video_stem: str, filename: str, req: KeepRequest = None):
         clip_path = output_dir / DIR_CLIPS / DIR_PENDING / video_stem / filename
         meta_path = output_dir / DIR_METADATA / f"{video_stem}_clips.json"
 
@@ -248,12 +255,37 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
 
         kept_dir = output_dir / DIR_CLIPS / DIR_KEPT / video_stem
         kept_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            shutil.copy2(str(clip_path), str(kept_dir / filename))
-        except OSError:
-            pass
+        dest = kept_dir / filename
+
+        needs_trim = req and (req.trim_start > 0.1 or req.trim_end > 0.1)
+
+        if needs_trim:
+            duration = req.trim_end - req.trim_start
+            if duration < 1:
+                raise HTTPException(400, "Trimmed clip would be too short")
+            # Re-encode trimmed clip
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-ss", f"{req.trim_start:.3f}",
+                    "-i", str(clip_path),
+                    "-t", f"{duration:.3f}",
+                    "-c:v", "libx264", "-c:a", "aac",
+                    "-avoid_negative_ts", "make_zero",
+                    str(dest),
+                ],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                raise HTTPException(500, f"FFmpeg failed: {result.stderr[-200:]}")
+        else:
+            try:
+                shutil.copy2(str(clip_path), str(dest))
+            except OSError:
+                pass
+
         update_clip_status(meta_path, filename, "kept")
-        return {"status": "kept"}
+        return {"status": "kept", "trimmed": bool(needs_trim)}
 
     @app.post("/api/clips/{video_stem}/{filename}/discard")
     def discard_clip(video_stem: str, filename: str):
