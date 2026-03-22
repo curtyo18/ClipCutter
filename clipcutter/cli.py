@@ -106,4 +106,9 @@ def ui(output_dir, port):
 
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    # Suppress noisy asyncio socket errors on Windows
+    import logging
+    logging.getLogger("asyncio").setLevel(logging.CRITICAL)
+
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
