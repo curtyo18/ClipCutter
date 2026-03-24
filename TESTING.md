@@ -138,4 +138,4 @@ pytest tests/test_ui_review.py -v  # Single file
 
 ---
 
-**Status**: Plan only, no implementation yet. Ready for future Claude session.
+**Status**: Implemented. 21 tests across 4 files, all passing. Uses FastAPI TestClient (no browser automation needed). Run with `pytest tests/ -v`.

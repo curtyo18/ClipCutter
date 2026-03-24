@@ -1,0 +1,377 @@
+"""Browser-based UI tests using Playwright (Scenarios 1, 3, 4, 5).
+
+These tests launch a real server and drive the UI with a headless Chromium
+browser, validating that the SPA tabs, buttons, and workflows function
+correctly end-to-end.
+"""
+
+import json
+import shutil
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+import pytest
+import uvicorn
+
+from clipcutter.web import create_app
+from tests.conftest import create_pending_clip, save_test_metadata
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+def _free_port():
+    """Find a free TCP port."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture
+def live_app():
+    """Start a real uvicorn server on a random port; yield (url, output_dir).
+    Temp directory is cleaned up after the test."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="clipcutter_browser_test_"))
+    output_dir = tmp_dir / "output"
+    app = create_app(output_dir)
+    port = _free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port,
+                                           log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    # Wait until the server is accepting connections
+    deadline = time.time() + 10
+    import socket
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        pytest.fail("Server did not start in time")
+
+    yield f"http://127.0.0.1:{port}", output_dir
+
+    server.should_exit = True
+    thread.join(timeout=5)
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@pytest.fixture
+def browser_page(live_app):
+    """Playwright page connected to the live app. Returns (page, url, output_dir)."""
+    from playwright.sync_api import sync_playwright
+    url, output_dir = live_app
+    pw = sync_playwright().start()
+    browser = pw.chromium.launch(headless=True)
+    page = browser.new_page()
+    yield page, url, output_dir
+    browser.close()
+    pw.stop()
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+class TestTabNavigation:
+    """Verify the three tabs render and switch correctly."""
+
+    def test_tabs_switch(self, browser_page):
+        page, url, _ = browser_page
+        page.goto(url)
+
+        # Process tab is active by default
+        assert page.locator("#view-process").is_visible()
+        assert not page.locator("#view-review").is_visible()
+
+        # Switch to Review tab
+        page.click('[data-tab="review"]')
+        page.wait_for_timeout(300)
+        assert page.locator("#view-review").is_visible()
+        assert not page.locator("#view-process").is_visible()
+
+        # Switch to Export tab
+        page.click('[data-tab="export"]')
+        page.wait_for_timeout(300)
+        assert page.locator("#view-export").is_visible()
+        assert not page.locator("#view-review").is_visible()
+
+
+class TestProcessTab:
+    """Verify the Process tab form elements exist and process button works."""
+
+    def test_process_form_elements(self, browser_page):
+        page, url, _ = browser_page
+        page.goto(url)
+
+        assert page.locator("#folderPath").is_visible()
+        assert page.locator("#sensitivity").is_visible()
+        assert page.locator("#context").is_visible()
+        assert page.locator("#btnProcess").is_visible()
+        assert page.locator("#logBox").is_visible()
+
+    def test_process_empty_folder_shows_alert(self, browser_page):
+        page, url, _ = browser_page
+        page.goto(url)
+
+        # Clear the folder field (it may have a default from /api/defaults)
+        page.fill("#folderPath", "")
+
+        # Handle the alert dialog
+        alert_message = []
+        page.on("dialog", lambda d: (alert_message.append(d.message), d.accept()))
+
+        page.click("#btnProcess")
+        page.wait_for_timeout(500)
+
+        assert len(alert_message) == 1
+        assert "folder" in alert_message[0].lower() or "Enter" in alert_message[0]
+
+
+class TestReviewTabBrowser:
+    """Test the Review tab workflow via browser: keep, discard, custom name."""
+
+    def test_empty_review_shows_message(self, browser_page):
+        page, url, _ = browser_page
+        page.goto(url)
+        page.click('[data-tab="review"]')
+        page.wait_for_timeout(500)
+
+        text = page.locator("#reviewContent").inner_text()
+        assert "No pending clips" in text
+
+    def test_review_shows_clip(self, browser_page):
+        page, url, output_dir = browser_page
+
+        # Set up a pending clip
+        stem = "browsevid"
+        clip = create_pending_clip(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/browsevid.mp4",
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/browsevid.mp4")
+
+        page.goto(url)
+        page.click('[data-tab="review"]')
+        page.wait_for_timeout(500)
+
+        # Should show the clip with Keep/Skip/Discard buttons
+        assert page.locator(".btn-keep").is_visible()
+        assert page.locator(".btn-skip").is_visible()
+        assert page.locator(".btn-discard").is_visible()
+
+        # Should show detection info
+        text = page.locator("#reviewContent").inner_text()
+        assert "volume spike" in text.lower() or "Confidence" in text
+
+    def test_keep_clip_via_button(self, browser_page):
+        page, url, output_dir = browser_page
+
+        stem = "keepbtn"
+        clip = create_pending_clip(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/keepbtn.mp4",
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/keepbtn.mp4")
+
+        page.goto(url)
+        page.click('[data-tab="review"]')
+        page.wait_for_timeout(500)
+
+        # Fill custom name
+        page.fill("#clipCustomName", "My Browser Clip")
+
+        # Click Keep
+        page.click(".btn-keep")
+        page.wait_for_timeout(500)
+
+        # Should show "Review Complete" since there was only 1 clip
+        text = page.locator("#reviewContent").inner_text()
+        assert "Review Complete" in text
+        assert "1 kept" in text
+
+        # Verify file was kept and custom name saved
+        kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
+        assert kept_path.exists()
+
+        meta = _load_meta(output_dir, stem)
+        assert meta["clips"][0]["status"] == "kept"
+        assert meta["clips"][0]["custom_name"] == "My Browser Clip"
+
+    def test_discard_clip_via_button(self, browser_page):
+        page, url, output_dir = browser_page
+
+        stem = "discardbtn"
+        clip = create_pending_clip(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/discardbtn.mp4",
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/discardbtn.mp4")
+
+        page.goto(url)
+        page.click('[data-tab="review"]')
+        page.wait_for_timeout(500)
+
+        page.click(".btn-discard")
+        page.wait_for_timeout(500)
+
+        text = page.locator("#reviewContent").inner_text()
+        assert "Review Complete" in text
+        assert "1 discarded" in text
+
+        meta = _load_meta(output_dir, stem)
+        assert meta["clips"][0]["status"] == "discarded"
+
+    def test_keyboard_shortcuts(self, browser_page):
+        """Verify K/S/D keyboard shortcuts work for clip actions."""
+        page, url, output_dir = browser_page
+
+        stem = "kbdvid"
+        clips = [
+            create_pending_clip(output_dir, stem, f"clip_{i:03d}.mp4",
+                                source_video="/fake/kbdvid.mp4",
+                                confidence=0.9 - i * 0.1)
+            for i in range(3)
+        ]
+        save_test_metadata(output_dir, stem, clips, "/fake/kbdvid.mp4")
+
+        page.goto(url)
+        page.click('[data-tab="review"]')
+        page.wait_for_timeout(500)
+
+        # K = keep first clip
+        page.keyboard.press("k")
+        page.wait_for_timeout(500)
+
+        # S = skip second clip
+        page.keyboard.press("s")
+        page.wait_for_timeout(500)
+
+        # D = discard third clip
+        page.keyboard.press("d")
+        page.wait_for_timeout(500)
+
+        text = page.locator("#reviewContent").inner_text()
+        assert "Review Complete" in text
+        assert "1 kept" in text
+        assert "1 discarded" in text
+        assert "1 skipped" in text
+
+
+class TestExportTabBrowser:
+    """Test the Export tab displays kept clips and preset controls."""
+
+    def test_export_shows_kept_clips(self, browser_page):
+        page, url, output_dir = browser_page
+
+        # Create a kept clip
+        stem = "expvid"
+        clip = create_pending_clip(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/expvid.mp4",
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/expvid.mp4")
+
+        # Keep it via API
+        from starlette.testclient import TestClient
+        app = create_app(output_dir)
+        client = TestClient(app)
+        client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
+                    json={"trim_start": 0.0, "trim_end": 0.0,
+                          "custom_name": "Export Test"})
+
+        page.goto(url)
+        page.click('[data-tab="export"]')
+        page.wait_for_timeout(800)
+
+        # Should show the clip in the export list
+        text = page.locator("#view-export").inner_text()
+        assert "clip_001.mp4" in text
+
+        # Should show preset selector
+        assert page.locator("#encodePreset").is_visible()
+
+    def test_export_preset_options(self, browser_page):
+        page, url, _ = browser_page
+        page.goto(url)
+        page.click('[data-tab="export"]')
+        page.wait_for_timeout(800)
+
+        # Verify all presets appear in dropdown
+        options = page.locator("#encodePreset option").all_text_contents()
+        option_text = " ".join(options).lower()
+        assert "original" in option_text
+        assert "high" in option_text
+        assert "low" in option_text
+        assert "gif" in option_text
+
+
+class TestFullBrowserWorkflow:
+    """Scenario 1 end-to-end via browser: process -> review -> keep -> export."""
+
+    def test_process_review_export(self, browser_page, mixed_video):
+        page, url, output_dir = browser_page
+
+        # 1. Process tab: enter folder and process
+        proc_dir = output_dir / "source"
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(mixed_video), str(proc_dir / "mixed_10s.mp4"))
+
+        page.goto(url)
+        page.fill("#folderPath", str(proc_dir))
+        page.click("#btnProcess")
+
+        # Wait for processing to complete (watch for "Done!" in log)
+        page.wait_for_function(
+            """() => {
+                const box = document.getElementById('logBox');
+                return box && box.innerHTML.includes('Done!');
+            }""",
+            timeout=120000,
+        )
+
+        # 2. Review tab: verify clip appears
+        page.click('[data-tab="review"]')
+        page.wait_for_timeout(500)
+
+        assert page.locator(".btn-keep").is_visible(), "Should show a clip to review"
+
+        # Set custom name and keep
+        page.fill("#clipCustomName", "Browser Full Test")
+        page.click(".btn-keep")
+        page.wait_for_timeout(500)
+
+        # Should reach "Review Complete"
+        text = page.locator("#reviewContent").inner_text()
+        assert "Review Complete" in text
+
+        # 3. Export tab: verify clip in export list
+        page.click('[data-tab="export"]')
+        page.wait_for_timeout(800)
+
+        export_text = page.locator("#view-export").inner_text()
+        assert "mixed_10s" in export_text.lower() or "clip_" in export_text.lower()
+
+        # Verify metadata has custom name
+        meta_dir = output_dir / "metadata"
+        meta_files = list(meta_dir.glob("*_clips.json"))
+        assert len(meta_files) >= 1
+        meta = json.loads(meta_files[0].read_text(encoding="utf-8"))
+        kept_clips = [c for c in meta["clips"] if c["status"] == "kept"]
+        assert len(kept_clips) >= 1
+        assert kept_clips[0].get("custom_name") == "Browser Full Test"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _load_meta(output_dir: Path, video_stem: str) -> dict:
+    meta_path = output_dir / "metadata" / f"{video_stem}_clips.json"
+    return json.loads(meta_path.read_text(encoding="utf-8"))

@@ -57,4 +57,32 @@ output/
 - **Encoding presets**: 4 options — `original` (copy, default), `high` (H.264 crf18), `low` (H.264 crf26), `gif` (animated GIF, no sound, optional slowdown via `setpts`). H.265/VP9 removed (codec availability issues on Windows).
 - **GIF slowdown**: `slowdown_factor` param (0.25–1.0) only applies to GIF preset. Woven into FFmpeg palette filter chain.
 - **YouTube OAuth**: Credentials stored in `output/.youtube_credentials.json` (dotfile, gitignored). Resumable chunked upload with progress tracking.
-- **No tests yet**: `TESTING.md` has an integration test plan (pytest + browser automation). Focuses on Process→Review→Encode workflows, skips YouTube (external dep).
+## Testing
+
+32 tests across 5 files. Run with `pytest tests/ -v`. All temp files are cleaned up after each test.
+
+```bash
+pytest tests/ -v                    # Full suite (~42s)
+pytest tests/ -v -k "not browser"   # API-only tests (~6s, no Playwright needed)
+pytest tests/test_ui_browser.py -v  # Browser tests only (~40s)
+```
+
+**Test files:**
+```
+tests/
+  conftest.py          # Fixtures: FFmpeg-generated videos, TestClient, temp dirs
+  test_process.py      # Pipeline: silence→fallback, noise→detection, mixed workflow
+  test_review.py       # Review API: keep/discard, custom names, trim, keep+discard mix
+  test_export.py       # Encoding: all 4 presets, custom name in output filename
+  test_metadata.py     # Metadata persistence: roundtrip, status, custom_name, encoding
+  test_ui_browser.py   # Playwright (headless Chromium): tabs, buttons, keyboard shortcuts, full workflow
+```
+
+**Dependencies:** `pytest`, `httpx` (for TestClient), `playwright` + `pytest-playwright` (browser tests). Install Chromium: `python -m playwright install chromium`.
+
+**Key testing details:**
+- Test videos generated on-the-fly via FFmpeg lavfi (no committed binaries).
+- Silent video produces a fallback clip (by design) — test asserts fallback, not zero clips.
+- Tiny 1-second mp4s used as fake clips for review/export tests (fast to generate).
+- Browser tests spin up a real uvicorn server per test on a random port.
+- YouTube upload tests are skipped (external dependency).
