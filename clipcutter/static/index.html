@@ -1057,6 +1057,14 @@ function renderExportView() {
     html += `<option value="${fps === null ? '' : fps}">${fps === null ? 'Original' : fps}</option>`;
   }
   html += `</select></div>`;
+  html += `<div class="form-group" id="slowdownGroup" style="display:none">`;
+  html += `<label>Slowdown</label>`;
+  html += `<select class="select-styled" id="encodeSlowdown" style="width:100px">`;
+  html += `<option value="">1x (normal)</option>`;
+  html += `<option value="0.75">0.75x (25% slower)</option>`;
+  html += `<option value="0.5">0.5x (50% slower / 2x duration)</option>`;
+  html += `<option value="0.25">0.25x (75% slower / 4x duration)</option>`;
+  html += `</select></div>`;
   html += `<button class="btn-secondary" onclick="toggleAllClips('encode')">Select All</button>`;
   html += `<button class="btn-process" id="btnEncode" onclick="startEncoding()">Encode Selected</button>`;
   html += `</div>`;
@@ -1214,6 +1222,19 @@ function renderExportView() {
 
   document.getElementById('exportContent').innerHTML = html;
 
+  // Show slowdown option only for GIF preset
+  const presetSelect = document.getElementById('encodePreset');
+  if (presetSelect) {
+    const updateSlowdownVisibility = () => {
+      const slowdownGroup = document.getElementById('slowdownGroup');
+      if (slowdownGroup) {
+        slowdownGroup.style.display = presetSelect.value === 'gif' ? 'flex' : 'none';
+      }
+    };
+    updateSlowdownVisibility();
+    presetSelect.addEventListener('change', updateSlowdownVisibility);
+  }
+
   // Attach playlist create handler
   const plSelect = document.getElementById('ytPlaylist');
   if (plSelect) {
@@ -1250,6 +1271,8 @@ async function startEncoding() {
   const preset = document.getElementById('encodePreset').value;
   const fpsVal = document.getElementById('encodeFps').value;
   const fps = fpsVal ? parseInt(fpsVal) : null;
+  const slowdownVal = document.getElementById('encodeSlowdown').value;
+  const slowdown = slowdownVal ? parseFloat(slowdownVal) : null;
 
   const clips_to_encode = [];
   checkboxes.forEach(cb => {
@@ -1266,7 +1289,7 @@ async function startEncoding() {
     const res = await fetch('/api/encode', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({clips: clips_to_encode, preset, target_fps: fps}),
+      body: JSON.stringify({clips: clips_to_encode, preset, target_fps: fps, slowdown_factor: slowdown}),
     });
     if (!res.ok) {
       const err = await res.json();

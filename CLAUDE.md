@@ -28,7 +28,7 @@ clipcutter/
   metadata.py   # JSON read/write/update
   models.py     # Dataclasses: Highlight, ClipBoundary, ClipMetadata
   config.py     # All tunable constants + encoding presets
-  encoder.py    # FFmpeg re-encoding: presets (H.264, H.265, VP9, copy/original)
+  encoder.py    # FFmpeg encoding: presets (original/high/low/gif+slowdown)
   youtube.py    # YouTube Data API v3: OAuth2, upload, playlists
   reviewer.py   # Terminal-based keep/discard review
   web.py        # FastAPI app: 29 endpoints (process, review, encode, upload, OAuth)
@@ -54,6 +54,7 @@ output/
 - **Windows file locking**: `FileResponse` holds handles. Keep = `shutil.copy2`, discard = metadata-only. `_cleanup_stale_pending()` runs on startup.
 - **Metadata `source_video`**: Stores full resolved path (not just filename) to support source deletion.
 - **Custom names in metadata**: Review UI allows optional custom clip names (no file rename to avoid locking). Names stored in metadata, used during encoding/export for output filenames.
-- **"Copy" encoding preset**: Default preset copies original file as-is (fastest option). Re-encoding only when compression/format change needed.
+- **Encoding presets**: 4 options — `original` (copy, default), `high` (H.264 crf18), `low` (H.264 crf26), `gif` (animated GIF, no sound, optional slowdown via `setpts`). H.265/VP9 removed (codec availability issues on Windows).
+- **GIF slowdown**: `slowdown_factor` param (0.25–1.0) only applies to GIF preset. Woven into FFmpeg palette filter chain.
 - **YouTube OAuth**: Credentials stored in `output/.youtube_credentials.json` (dotfile, gitignored). Resumable chunked upload with progress tracking.
-- **No tests**: Local home-use tool. Verify by running against real videos.
+- **No tests yet**: `TESTING.md` has an integration test plan (pytest + browser automation). Focuses on Process→Review→Encode workflows, skips YouTube (external dep).

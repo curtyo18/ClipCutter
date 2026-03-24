@@ -38,14 +38,16 @@ def is_copy_preset(preset: EncodingPreset) -> bool:
 
 def encode_clip(input_path: Path, output_path: Path,
                 preset: EncodingPreset,
-                target_fps: Optional[int] = None) -> Path:
+                target_fps: Optional[int] = None,
+                slowdown_factor: Optional[float] = None) -> Path:
     """Encode a clip using the given preset.
 
     Args:
         input_path: Path to the source clip.
         output_path: Path for the encoded output.
         preset: EncodingPreset with FFmpeg arguments.
-        target_fps: Optional framerate override.
+        target_fps: Optional framerate override (video only).
+        slowdown_factor: Optional playback speed factor (0.5 = half speed, only for GIF).
 
     Returns:
         Path to the encoded file.
@@ -56,23 +58,35 @@ def encode_clip(input_path: Path, output_path: Path,
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Copy preset with no FPS change: just copy the file
-    if is_copy_preset(preset) and target_fps is None:
+    if is_copy_preset(preset) and target_fps is None and slowdown_factor is None:
         shutil.copy2(str(input_path), str(output_path))
         return output_path
 
     cmd = ["ffmpeg", "-y", "-i", str(input_path)]
 
-    if is_copy_preset(preset):
-        # Copy preset but with FPS change requires re-encoding
-        cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "18",
-                     "-c:a", "aac", "-b:a", "192k"])
+    # Handle GIF with optional slowdown
+    if preset.name == "gif":
+        vf = list(preset.ffmpeg_args)  # Starts with palette generation
+        if slowdown_factor and slowdown_factor != 1.0:
+            # Insert slowdown into filter chain: setpts=PTS/factor
+            # Replace the palette filter to include slowdown
+            base_filter = f"split=2[m0][m1];[m0]palettegen[p];[m1]setpts=PTS/{slowdown_factor}[s];[s][p]paletteuse"
+            cmd.extend(["-vf", base_filter])
+        else:
+            cmd.extend(vf)
+        cmd.append(str(output_path))
     else:
-        cmd.extend(preset.ffmpeg_args)
+        if is_copy_preset(preset):
+            # Copy preset but with FPS change requires re-encoding
+            cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                        "-c:a", "aac", "-b:a", "192k"])
+        else:
+            cmd.extend(preset.ffmpeg_args)
 
-    if target_fps is not None:
-        cmd.extend(["-r", str(target_fps)])
+        if target_fps is not None:
+            cmd.extend(["-r", str(target_fps)])
 
-    cmd.append(str(output_path))
+        cmd.append(str(output_path))
 
     try:
         subprocess.run(cmd, capture_output=True, text=True, check=True)

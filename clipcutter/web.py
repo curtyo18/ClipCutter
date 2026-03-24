@@ -44,6 +44,7 @@ class EncodeRequest(BaseModel):
     clips: List[EncodeClipRef]
     preset: str
     target_fps: Optional[int] = None
+    slowdown_factor: Optional[float] = None  # For GIF: 0.5 = half speed
 
 
 class YouTubeAuthStartRequest(BaseModel):
@@ -699,7 +700,7 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
                 output_path = encoded_dir / out_name
 
                 try:
-                    encode_clip(input_path, output_path, preset, req.target_fps)
+                    encode_clip(input_path, output_path, preset, req.target_fps, req.slowdown_factor)
                     if meta_path.exists():
                         update_clip_encoding(meta_path, clip_ref.filename, out_name, req.preset)
                     enc_state.add_completed(clip_ref.filename)

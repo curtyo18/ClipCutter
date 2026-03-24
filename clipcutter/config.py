@@ -72,34 +72,29 @@ VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m
 DIR_ENCODED = "encoded"
 
 ENCODING_PRESETS = {
-    "copy": {
+    "original": {
         "display_name": "Original (No Re-encode)",
         "extension": None,  # Keep source extension
         "ffmpeg_args": [],  # No re-encoding, just copy
     },
-    "h264_hq": {
-        "display_name": "H.264 High Quality",
+    "high": {
+        "display_name": "High Quality",
         "extension": ".mp4",
         "ffmpeg_args": ["-c:v", "libx264", "-preset", "slow", "-crf", "18", "-c:a", "aac", "-b:a", "192k"],
     },
-    "h264_web": {
-        "display_name": "H.264 Web (Smaller)",
+    "low": {
+        "display_name": "Low Quality (Smaller)",
         "extension": ".mp4",
-        "ffmpeg_args": ["-c:v", "libx264", "-preset", "medium", "-crf", "23", "-c:a", "aac", "-b:a", "128k"],
+        "ffmpeg_args": ["-c:v", "libx264", "-preset", "medium", "-crf", "26", "-c:a", "aac", "-b:a", "96k"],
     },
-    "h265": {
-        "display_name": "H.265/HEVC",
-        "extension": ".mp4",
-        "ffmpeg_args": ["-c:v", "libx265", "-preset", "medium", "-crf", "22", "-c:a", "aac", "-b:a", "192k", "-tag:v", "hvc1"],
-    },
-    "vp9_webm": {
-        "display_name": "VP9 WebM",
-        "extension": ".webm",
-        "ffmpeg_args": ["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-c:a", "libopus", "-b:a", "128k"],
+    "gif": {
+        "display_name": "Animated GIF (no sound)",
+        "extension": ".gif",
+        "ffmpeg_args": ["-vf", "split=2[m0][m1];[m0]palettegen[p];[m1][p]paletteuse", "-an"],
     },
 }
 
-DEFAULT_ENCODING_PRESET = "copy"
+DEFAULT_ENCODING_PRESET = "original"
 DEFAULT_TARGET_FPS = None
 
 # YouTube
