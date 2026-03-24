@@ -3,17 +3,22 @@
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from clipcutter.config import DIR_CLIPS, DIR_KEPT, DIR_METADATA, DIR_PENDING
-from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_status
+from clipcutter.config import (
+    DIR_CLIPS, DIR_ENCODED, DIR_KEPT, DIR_METADATA, DIR_PENDING,
+    YOUTUBE_CREDENTIALS_FILE, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_DEFAULT_PRIVACY,
+)
+from clipcutter.metadata import (
+    load_metadata, load_metadata_dict, update_clip_encoding,
+    update_clip_status, update_clip_youtube,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -27,6 +32,169 @@ class ProcessRequest(BaseModel):
 class KeepRequest(BaseModel):
     trim_start: float = 0.0
     trim_end: float = 0.0
+    custom_name: Optional[str] = None
+
+
+class EncodeClipRef(BaseModel):
+    video_stem: str
+    filename: str
+
+
+class EncodeRequest(BaseModel):
+    clips: List[EncodeClipRef]
+    preset: str
+    target_fps: Optional[int] = None
+
+
+class YouTubeAuthStartRequest(BaseModel):
+    client_id: str
+    client_secret: str
+
+
+class YouTubeUploadRequest(BaseModel):
+    video_stem: str
+    filename: str
+    use_encoded: bool = True
+    title: str
+    description: str = ""
+    tags: List[str] = []
+    category_id: str = YOUTUBE_DEFAULT_CATEGORY
+    privacy: str = YOUTUBE_DEFAULT_PRIVACY
+    playlist_id: Optional[str] = None
+
+
+class YouTubeBatchUploadRequest(BaseModel):
+    clips: List[YouTubeUploadRequest]
+
+
+class PlaylistCreateRequest(BaseModel):
+    title: str
+    privacy: str = "private"
+
+
+class EncodingState:
+    """Thread-safe encoding state shared between API endpoints."""
+
+    def __init__(self):
+        self.running = False
+        self.current_file: Optional[str] = None
+        self.current_index: int = 0
+        self.total: int = 0
+        self.completed: list[str] = []
+        self.errors: list[dict] = []
+        self.cancelled = False
+        self._lock = threading.Lock()
+
+    def reset(self, total: int):
+        with self._lock:
+            self.running = True
+            self.current_file = None
+            self.current_index = 0
+            self.total = total
+            self.completed = []
+            self.errors = []
+            self.cancelled = False
+
+    def set_current(self, filename: str, index: int):
+        with self._lock:
+            self.current_file = filename
+            self.current_index = index
+
+    def add_completed(self, filename: str):
+        with self._lock:
+            self.completed.append(filename)
+
+    def add_error(self, filename: str, error: str):
+        with self._lock:
+            self.errors.append({"filename": filename, "error": error})
+
+    def finish(self):
+        with self._lock:
+            self.running = False
+            self.current_file = None
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "running": self.running,
+                "current_file": self.current_file,
+                "current_index": self.current_index,
+                "total": self.total,
+                "completed": list(self.completed),
+                "errors": list(self.errors),
+                "cancelled": self.cancelled,
+            }
+
+
+class UploadState:
+    """Thread-safe upload state shared between API endpoints."""
+
+    def __init__(self):
+        self.running = False
+        self.current_file: Optional[str] = None
+        self.current_index: int = 0
+        self.total: int = 0
+        self.bytes_sent: int = 0
+        self.bytes_total: int = 0
+        self.completed: list[dict] = []
+        self.errors: list[dict] = []
+        self.cancelled = False
+        self._lock = threading.Lock()
+
+    def reset(self, total: int):
+        with self._lock:
+            self.running = True
+            self.current_file = None
+            self.current_index = 0
+            self.total = total
+            self.bytes_sent = 0
+            self.bytes_total = 0
+            self.completed = []
+            self.errors = []
+            self.cancelled = False
+
+    def set_current(self, filename: str, index: int):
+        with self._lock:
+            self.current_file = filename
+            self.current_index = index
+            self.bytes_sent = 0
+            self.bytes_total = 0
+
+    def update_progress(self, bytes_sent: int, bytes_total: int):
+        with self._lock:
+            self.bytes_sent = bytes_sent
+            self.bytes_total = bytes_total
+
+    def add_completed(self, filename: str, video_id: str, url: str):
+        with self._lock:
+            self.completed.append({
+                "filename": filename,
+                "video_id": video_id,
+                "url": url,
+            })
+
+    def add_error(self, filename: str, error: str):
+        with self._lock:
+            self.errors.append({"filename": filename, "error": error})
+
+    def finish(self):
+        with self._lock:
+            self.running = False
+            self.current_file = None
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "running": self.running,
+                "current_file": self.current_file,
+                "current_index": self.current_index,
+                "total": self.total,
+                "bytes_sent": self.bytes_sent,
+                "bytes_total": self.bytes_total,
+                "completed": list(self.completed),
+                "errors": list(self.errors),
+                "cancelled": self.cancelled,
+            }
 
 
 class ProcessingState:
@@ -125,6 +293,8 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
     output_dir = Path(output_dir).resolve()
     app = FastAPI(title="ClipCutter")
     proc_state = ProcessingState()
+    enc_state = EncodingState()
+    upl_state = UploadState()
     launch_cwd = cwd or str(Path.cwd())
 
     # Clean up stale files in pending that have already been kept/discarded
@@ -242,8 +412,14 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
         if not clip_path.exists():
             clip_path = output_dir / DIR_CLIPS / DIR_KEPT / video_stem / filename
         if not clip_path.exists():
+            clip_path = output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / filename
+        if not clip_path.exists():
             raise HTTPException(404, "Clip not found")
-        return FileResponse(clip_path, media_type="video/mp4")
+        # Determine media type from extension
+        media_type = "video/mp4"
+        if filename.endswith(".webm"):
+            media_type = "video/webm"
+        return FileResponse(clip_path, media_type=media_type)
 
     @app.post("/api/clips/{video_stem}/{filename}/keep")
     def keep_clip(video_stem: str, filename: str, req: KeepRequest = None):
@@ -285,6 +461,12 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
                 pass
 
         update_clip_status(meta_path, filename, "kept")
+
+        # Store custom name in metadata (no file rename to avoid locking)
+        if req and req.custom_name and req.custom_name.strip():
+            from clipcutter.metadata import update_clip_custom_name
+            update_clip_custom_name(meta_path, filename, req.custom_name.strip())
+
         return {"status": "kept", "trimmed": bool(needs_trim)}
 
     @app.post("/api/clips/{video_stem}/{filename}/discard")
@@ -376,5 +558,432 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
                 pass
 
         return {"status": "deleted", "freed_mb": size_mb, "leftover": leftover}
+
+    # ------------------------------------------------------------------
+    # Encoding API
+    # ------------------------------------------------------------------
+
+    @app.get("/api/encoding/presets")
+    def list_encoding_presets():
+        from clipcutter.encoder import get_presets
+        from clipcutter.config import DEFAULT_ENCODING_PRESET
+        presets = get_presets()
+        result = []
+        for name, p in presets.items():
+            result.append({
+                "name": name,
+                "display_name": p.display_name,
+                "extension": p.extension or "(same as source)",
+            })
+        return {
+            "presets": result,
+            "default": DEFAULT_ENCODING_PRESET,
+            "fps_options": [None, 24, 30, 60],
+        }
+
+    @app.get("/api/kept")
+    def list_kept_clips():
+        """List all kept clips with encoding and YouTube status from metadata."""
+        kept_dir = output_dir / DIR_CLIPS / DIR_KEPT
+        meta_dir = output_dir / DIR_METADATA
+
+        if not kept_dir.exists():
+            return {"clips": [], "total": 0}
+
+        clips = []
+        for video_dir in sorted(kept_dir.iterdir()):
+            if not video_dir.is_dir():
+                continue
+
+            video_stem = video_dir.name
+            meta_path = meta_dir / f"{video_stem}_clips.json"
+            if not meta_path.exists():
+                continue
+
+            meta_data = load_metadata_dict(meta_path)
+            source_video = meta_data.get("source_video", video_stem)
+            clip_metas = load_metadata(meta_path)
+
+            for clip in clip_metas:
+                if clip.status != "kept":
+                    continue
+                clip_path = video_dir / clip.filename
+                if not clip_path.exists():
+                    continue
+
+                clip_info = {
+                    "filename": clip.filename,
+                    "source_video": source_video,
+                    "video_stem": video_stem,
+                    "start_time": clip.start_time,
+                    "end_time": clip.end_time,
+                    "duration": clip.duration,
+                    "detection_reasons": clip.detection_reasons,
+                    "confidence": clip.confidence,
+                    "video_url": f"/video/{video_stem}/{clip.filename}",
+                    "custom_name": clip.custom_name,
+                    "encoded_filename": clip.encoded_filename,
+                    "encoding_preset": clip.encoding_preset,
+                    "youtube_video_id": clip.youtube_video_id,
+                    "youtube_url": clip.youtube_url,
+                    "youtube_upload_status": clip.youtube_upload_status,
+                }
+
+                # Check if encoded file actually exists
+                if clip.encoded_filename:
+                    enc_path = output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / clip.encoded_filename
+                    clip_info["encoded_exists"] = enc_path.exists()
+                    if enc_path.exists():
+                        clip_info["encoded_video_url"] = f"/video/encoded/{video_stem}/{clip.encoded_filename}"
+                else:
+                    clip_info["encoded_exists"] = False
+
+                clips.append(clip_info)
+
+        clips.sort(key=lambda c: (-c["confidence"],))
+        return {"clips": clips, "total": len(clips)}
+
+    @app.post("/api/encode")
+    def start_encoding(req: EncodeRequest):
+        if enc_state.running:
+            raise HTTPException(409, "Encoding already in progress")
+
+        if not req.clips:
+            raise HTTPException(400, "No clips selected for encoding")
+
+        from clipcutter.encoder import get_presets
+        presets = get_presets()
+        if req.preset not in presets:
+            raise HTTPException(400, f"Unknown preset: {req.preset}")
+
+        preset = presets[req.preset]
+
+        # Validate all files exist before starting
+        for clip_ref in req.clips:
+            kept_path = output_dir / DIR_CLIPS / DIR_KEPT / clip_ref.video_stem / clip_ref.filename
+            if not kept_path.exists():
+                raise HTTPException(404, f"Clip not found: {clip_ref.video_stem}/{clip_ref.filename}")
+
+        enc_state.reset(total=len(req.clips))
+
+        def run():
+            from clipcutter.encoder import encode_clip
+
+            for i, clip_ref in enumerate(req.clips):
+                if enc_state.cancelled:
+                    break
+
+                enc_state.set_current(clip_ref.filename, i + 1)
+                input_path = output_dir / DIR_CLIPS / DIR_KEPT / clip_ref.video_stem / clip_ref.filename
+                encoded_dir = output_dir / DIR_CLIPS / DIR_ENCODED / clip_ref.video_stem
+                meta_path = output_dir / DIR_METADATA / f"{clip_ref.video_stem}_clips.json"
+
+                # Use custom_name from metadata if available for output filename
+                custom_stem = None
+                if meta_path.exists():
+                    clip_metas_local = load_metadata(meta_path)
+                    for cm in clip_metas_local:
+                        if cm.filename == clip_ref.filename and cm.custom_name:
+                            # Sanitize: remove unsafe chars, keep it filesystem-safe
+                            safe = "".join(
+                                c for c in cm.custom_name
+                                if c.isalnum() or c in " _-"
+                            ).strip()
+                            if safe:
+                                custom_stem = safe.replace(" ", "_")
+                            break
+
+                stem = custom_stem or Path(clip_ref.filename).stem
+                ext = preset.extension if preset.extension else Path(clip_ref.filename).suffix
+                out_name = f"{stem}.{req.preset}{ext}"
+                output_path = encoded_dir / out_name
+
+                try:
+                    encode_clip(input_path, output_path, preset, req.target_fps)
+                    if meta_path.exists():
+                        update_clip_encoding(meta_path, clip_ref.filename, out_name, req.preset)
+                    enc_state.add_completed(clip_ref.filename)
+                except Exception as exc:
+                    enc_state.add_error(clip_ref.filename, str(exc))
+
+            enc_state.finish()
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"status": "started"}
+
+    @app.get("/api/encode/status")
+    def encoding_status():
+        return enc_state.snapshot()
+
+    @app.post("/api/encode/cancel")
+    def cancel_encoding():
+        enc_state.cancelled = True
+        return {"status": "cancelling"}
+
+    @app.get("/video/encoded/{video_stem}/{filename}")
+    def serve_encoded_video(video_stem: str, filename: str):
+        clip_path = output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / filename
+        if not clip_path.exists():
+            raise HTTPException(404, "Encoded clip not found")
+        media_type = "video/mp4"
+        if filename.endswith(".webm"):
+            media_type = "video/webm"
+        return FileResponse(clip_path, media_type=media_type)
+
+    # ------------------------------------------------------------------
+    # YouTube API
+    # ------------------------------------------------------------------
+
+    @app.get("/api/youtube/status")
+    def youtube_status():
+        """Check if YouTube credentials exist and are valid."""
+        from clipcutter.youtube import load_credentials, get_authenticated_service
+        creds_path = output_dir / YOUTUBE_CREDENTIALS_FILE
+        creds = load_credentials(creds_path)
+        if creds is None:
+            return {"authenticated": False}
+
+        try:
+            service, new_creds = get_authenticated_service(creds)
+            # Quick test: list a single channel to verify credentials and get name
+            resp = service.channels().list(part="snippet", mine=True).execute()
+            channel_name = ""
+            items = resp.get("items", [])
+            if items:
+                channel_name = items[0].get("snippet", {}).get("title", "")
+            # Save refreshed credentials if they changed
+            if new_creds.access_token != creds.access_token:
+                from clipcutter.youtube import save_credentials
+                save_credentials(new_creds, creds_path)
+            return {"authenticated": True, "channel_name": channel_name}
+        except Exception:
+            return {"authenticated": False, "error": "Credentials expired or invalid"}
+
+    @app.post("/api/youtube/auth/start")
+    def youtube_auth_start(req: YouTubeAuthStartRequest, request: Request):
+        """Save client_id/secret and return the OAuth2 authorization URL."""
+        from clipcutter.youtube import get_auth_url, YouTubeCredentials, save_credentials
+
+        # Determine redirect URI from request
+        base_url = str(request.base_url).rstrip("/")
+        redirect_uri = f"{base_url}/oauth/callback"
+
+        auth_url = get_auth_url(req.client_id, redirect_uri)
+
+        # Save partial credentials so we can use client_id/secret in callback
+        partial_creds = YouTubeCredentials(
+            access_token="",
+            refresh_token="",
+            token_expiry=None,
+            client_id=req.client_id,
+            client_secret=req.client_secret,
+        )
+        creds_path = output_dir / YOUTUBE_CREDENTIALS_FILE
+        save_credentials(partial_creds, creds_path)
+
+        return {"auth_url": auth_url}
+
+    @app.get("/oauth/callback", response_class=HTMLResponse)
+    def oauth_callback(code: str, request: Request):
+        """Exchange authorization code for credentials."""
+        from clipcutter.youtube import (
+            exchange_code, load_credentials, save_credentials,
+        )
+
+        creds_path = output_dir / YOUTUBE_CREDENTIALS_FILE
+        partial = load_credentials(creds_path)
+        if partial is None:
+            raise HTTPException(400, "No pending OAuth flow (client_id/secret missing)")
+
+        base_url = str(request.base_url).rstrip("/")
+        redirect_uri = f"{base_url}/oauth/callback"
+
+        try:
+            creds = exchange_code(
+                code=code,
+                client_id=partial.client_id,
+                client_secret=partial.client_secret,
+                redirect_uri=redirect_uri,
+            )
+            save_credentials(creds, creds_path)
+        except Exception as exc:
+            raise HTTPException(500, f"Token exchange failed: {exc}")
+
+        return HTMLResponse("""
+<!DOCTYPE html>
+<html>
+<head><title>ClipCutter - YouTube Auth</title></head>
+<body style="background:#1a1a2e;color:#eee;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+<div style="text-align:center">
+<h2>YouTube Authentication Successful</h2>
+<p>You can close this window.</p>
+</div>
+<script>
+if (window.opener) {
+    window.opener.postMessage({type: 'youtube-auth-success'}, window.location.origin);
+    setTimeout(function() { window.close(); }, 1500);
+}
+</script>
+</body>
+</html>
+""")
+
+    @app.post("/api/youtube/auth/revoke")
+    def youtube_auth_revoke():
+        """Delete stored YouTube credentials."""
+        creds_path = output_dir / YOUTUBE_CREDENTIALS_FILE
+        if creds_path.exists():
+            creds_path.unlink()
+        return {"status": "revoked"}
+
+    @app.get("/api/youtube/playlists")
+    def youtube_playlists():
+        from clipcutter.youtube import load_credentials, list_playlists
+        creds_path = output_dir / YOUTUBE_CREDENTIALS_FILE
+        creds = load_credentials(creds_path)
+        if creds is None:
+            raise HTTPException(401, "Not authenticated with YouTube")
+
+        try:
+            playlists = list_playlists(creds)
+            return {"playlists": playlists}
+        except Exception as exc:
+            raise HTTPException(500, f"Failed to list playlists: {exc}")
+
+    @app.post("/api/youtube/playlists")
+    def youtube_create_playlist(req: PlaylistCreateRequest):
+        from clipcutter.youtube import load_credentials, create_playlist
+        creds_path = output_dir / YOUTUBE_CREDENTIALS_FILE
+        creds = load_credentials(creds_path)
+        if creds is None:
+            raise HTTPException(401, "Not authenticated with YouTube")
+
+        try:
+            playlist = create_playlist(creds, req.title, req.privacy)
+            return playlist
+        except Exception as exc:
+            raise HTTPException(500, f"Failed to create playlist: {exc}")
+
+    @app.post("/api/youtube/upload")
+    def start_youtube_upload(req: YouTubeBatchUploadRequest):
+        if upl_state.running:
+            raise HTTPException(409, "Upload already in progress")
+
+        from clipcutter.youtube import load_credentials
+        creds_path = output_dir / YOUTUBE_CREDENTIALS_FILE
+        creds = load_credentials(creds_path)
+        if creds is None:
+            raise HTTPException(401, "Not authenticated with YouTube")
+
+        upl_state.reset(total=len(req.clips))
+
+        def run():
+            from clipcutter.youtube import (
+                upload_video, add_to_playlist, load_credentials, save_credentials,
+            )
+
+            current_creds = load_credentials(creds_path)
+
+            for i, clip_req in enumerate(req.clips):
+                if upl_state.cancelled:
+                    break
+
+                upl_state.set_current(clip_req.filename, i + 1)
+
+                # Check for duplicate upload (skip if already uploaded)
+                already_uploaded = False
+                meta_path = output_dir / DIR_METADATA / f"{clip_req.video_stem}_clips.json"
+                if meta_path.exists():
+                    dup_metas = load_metadata(meta_path)
+                    for dm in dup_metas:
+                        if dm.filename == clip_req.filename and dm.youtube_video_id:
+                            upl_state.add_completed(
+                                clip_req.filename, dm.youtube_video_id, dm.youtube_url or "")
+                            already_uploaded = True
+                            break
+                if already_uploaded:
+                    continue
+
+                # Determine which file to upload
+                if clip_req.use_encoded:
+                    # Look for encoded version via metadata
+                    meta_path = output_dir / DIR_METADATA / f"{clip_req.video_stem}_clips.json"
+                    file_path = None
+                    if meta_path.exists():
+                        clip_metas = load_metadata(meta_path)
+                        for cm in clip_metas:
+                            if cm.filename == clip_req.filename and cm.encoded_filename:
+                                enc_path = (output_dir / DIR_CLIPS / DIR_ENCODED /
+                                            clip_req.video_stem / cm.encoded_filename)
+                                if enc_path.exists():
+                                    file_path = enc_path
+                                break
+
+                    if file_path is None:
+                        # Fall back to kept version
+                        file_path = (output_dir / DIR_CLIPS / DIR_KEPT /
+                                     clip_req.video_stem / clip_req.filename)
+                else:
+                    file_path = (output_dir / DIR_CLIPS / DIR_KEPT /
+                                 clip_req.video_stem / clip_req.filename)
+
+                if not file_path.exists():
+                    upl_state.add_error(clip_req.filename, f"File not found: {file_path.name}")
+                    continue
+
+                def progress_cb(bytes_sent, bytes_total):
+                    upl_state.update_progress(bytes_sent, bytes_total)
+
+                result = upload_video(
+                    creds=current_creds,
+                    file_path=file_path,
+                    title=clip_req.title,
+                    description=clip_req.description,
+                    tags=clip_req.tags,
+                    category_id=clip_req.category_id,
+                    privacy=clip_req.privacy,
+                    progress_callback=progress_cb,
+                )
+
+                if result.success:
+                    upl_state.add_completed(clip_req.filename, result.video_id, result.url)
+
+                    # Update metadata
+                    meta_path = output_dir / DIR_METADATA / f"{clip_req.video_stem}_clips.json"
+                    if meta_path.exists():
+                        update_clip_youtube(
+                            meta_path, clip_req.filename,
+                            result.video_id, result.url,
+                        )
+
+                    # Add to playlist if requested
+                    if clip_req.playlist_id and result.video_id:
+                        try:
+                            add_to_playlist(current_creds, clip_req.playlist_id, result.video_id)
+                        except Exception:
+                            pass  # Non-fatal: upload succeeded
+                else:
+                    upl_state.add_error(clip_req.filename, result.error or "Unknown error")
+                    # Record failure in metadata
+                    meta_path = output_dir / DIR_METADATA / f"{clip_req.video_stem}_clips.json"
+                    if meta_path.exists():
+                        update_clip_youtube(
+                            meta_path, clip_req.filename,
+                            video_id="", url="", status="failed",
+                        )
+
+            upl_state.finish()
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"status": "started"}
+
+    @app.get("/api/youtube/upload/status")
+    def youtube_upload_status():
+        return upl_state.snapshot()
+
+    @app.post("/api/youtube/upload/cancel")
+    def cancel_youtube_upload():
+        upl_state.cancelled = True
+        return {"status": "cancelling"}
 
     return app

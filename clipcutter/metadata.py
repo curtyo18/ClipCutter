@@ -53,3 +53,55 @@ def update_clip_status(metadata_path: Path, filename: str, status: str) -> None:
     tmp = metadata_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     tmp.replace(metadata_path)
+
+
+def update_clip_custom_name(metadata_path: Path, filename: str,
+                            custom_name: str) -> None:
+    """Update a single clip's custom name in the metadata file."""
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    for clip in data["clips"]:
+        if clip["filename"] == filename:
+            clip["custom_name"] = custom_name
+            break
+
+    # Atomic write via temp file
+    tmp = metadata_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(metadata_path)
+
+
+def update_clip_encoding(metadata_path: Path, filename: str,
+                         encoded_filename: str, preset: str) -> None:
+    """Update a single clip's encoding info in the metadata file."""
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    for clip in data["clips"]:
+        if clip["filename"] == filename:
+            clip["encoded_filename"] = encoded_filename
+            clip["encoding_preset"] = preset
+            break
+
+    # Atomic write via temp file
+    tmp = metadata_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(metadata_path)
+
+
+def update_clip_youtube(metadata_path: Path, filename: str,
+                        video_id: str, url: str,
+                        status: str = "uploaded") -> None:
+    """Update a single clip's YouTube upload info in the metadata file."""
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    for clip in data["clips"]:
+        if clip["filename"] == filename:
+            clip["youtube_video_id"] = video_id
+            clip["youtube_url"] = url
+            clip["youtube_upload_status"] = status
+            break
+
+    # Atomic write via temp file
+    tmp = metadata_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(metadata_path)

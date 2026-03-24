@@ -205,6 +205,28 @@
   }
   .trim-indicator.active { color: #fbbf24; }
 
+  /* ---- Custom name input ---- */
+  .name-section {
+    padding: 0 24px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .clip-name-input {
+    flex: 1;
+    padding: 8px 12px;
+    background: #0f0f0f;
+    border: 1px solid #333;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .clip-name-input:focus { border-color: #60a5fa; }
+  .clip-name-input::placeholder { color: #555; }
+
   .progress { display: flex; gap: 4px; margin-bottom: 20px; height: 3px; }
   .progress-dot { flex: 1; border-radius: 2px; background: #2a2a2a; transition: background 0.3s; }
   .progress-dot.done { background: #166534; }
@@ -290,6 +312,258 @@
     border: 1px solid #333; border-radius: 4px;
     font-family: inherit; font-size: 11px; color: #aaa;
   }
+
+  /* ---- Export view ---- */
+  .export-section {
+    background: #1a1a1a;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .export-section h2 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 16px;
+  }
+  .export-toolbar {
+    display: flex;
+    gap: 12px;
+    align-items: end;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .clip-table { width: 100%; border-collapse: collapse; }
+  .clip-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid #222;
+  }
+  .clip-row:last-child { border-bottom: none; }
+  .clip-checkbox {
+    width: 18px;
+    height: 18px;
+    accent-color: #2563eb;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .clip-name {
+    font-size: 14px;
+    color: #e0e0e0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    flex: 1;
+  }
+  .clip-detail {
+    font-size: 12px;
+    color: #888;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .badge-encoded { background: #166534; color: #4ade80; }
+  .badge-uploaded { background: #1e3a5f; color: #60a5fa; }
+  .badge-error { background: #7f1d1d; color: #f87171; }
+  .badge-uploading { background: #3b2f1f; color: #fbbf24; }
+  .badge-ready { background: #2a2a2a; color: #888; }
+
+  .progress-bar {
+    height: 8px;
+    background: #2a2a2a;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 12px;
+  }
+  .progress-fill {
+    height: 100%;
+    background: #2563eb;
+    border-radius: 4px;
+    transition: width 0.3s;
+    width: 0%;
+  }
+  .progress-label {
+    font-size: 13px;
+    color: #aaa;
+    margin-top: 8px;
+  }
+
+  .yt-auth-section {
+    display: flex;
+    align-items: end;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .yt-auth-section .form-group input[type="text"],
+  .yt-auth-section .form-group input[type="password"] {
+    padding: 10px 12px;
+    background: #0f0f0f;
+    border: 1px solid #333;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+    width: 240px;
+  }
+  .yt-auth-section .form-group input:focus { border-color: #60a5fa; }
+  .yt-connected {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: #0f0f0f;
+    border: 1px solid #166534;
+    border-radius: 8px;
+    margin-bottom: 16px;
+  }
+  .yt-connected .yt-channel {
+    font-size: 14px;
+    color: #4ade80;
+    font-weight: 600;
+  }
+  .yt-help {
+    font-size: 12px;
+    color: #666;
+    margin-top: 4px;
+  }
+
+  .yt-settings {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .yt-settings .form-group.full-width {
+    grid-column: 1 / -1;
+  }
+
+  .select-styled {
+    padding: 10px 12px;
+    background: #0f0f0f;
+    border: 1px solid #333;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+    width: 100%;
+    cursor: pointer;
+    appearance: auto;
+  }
+  .select-styled:focus { border-color: #60a5fa; }
+
+  .textarea-styled {
+    padding: 10px 12px;
+    background: #0f0f0f;
+    border: 1px solid #333;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+    width: 100%;
+    min-height: 80px;
+    resize: vertical;
+  }
+  .textarea-styled:focus { border-color: #60a5fa; }
+
+  .title-input {
+    padding: 8px 10px;
+    background: #0f0f0f;
+    border: 1px solid #333;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+    flex: 1;
+    min-width: 0;
+  }
+  .title-input:focus { border-color: #60a5fa; }
+
+  .template-vars {
+    font-size: 11px;
+    color: #555;
+    margin-top: 4px;
+  }
+  .template-vars code {
+    background: #1a1a1a;
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: #888;
+  }
+
+  .btn-secondary {
+    padding: 10px 20px;
+    background: #333;
+    color: #ccc;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .btn-secondary:hover { background: #444; }
+
+  .btn-cancel {
+    padding: 8px 16px;
+    background: #7f1d1d;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .btn-cancel:hover { background: #991b1b; }
+
+  .btn-signout {
+    padding: 8px 14px;
+    background: #333;
+    color: #aaa;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn-signout:hover { background: #444; color: #fff; }
+
+  .upload-link {
+    color: #60a5fa;
+    text-decoration: none;
+    font-size: 12px;
+  }
+  .upload-link:hover { text-decoration: underline; }
+
+  .playlist-row {
+    display: flex;
+    gap: 8px;
+    align-items: end;
+  }
+  .playlist-row .select-styled { flex: 1; }
 </style>
 </head>
 <body>
@@ -302,8 +576,9 @@
 <div class="header">
   <h1>ClipCutter</h1>
   <div class="tabs">
-    <div class="tab active" onclick="switchTab('process')">Process</div>
-    <div class="tab" onclick="switchTab('review')">Review</div>
+    <div class="tab active" data-tab="process" onclick="switchTab('process')">Process</div>
+    <div class="tab" data-tab="review" onclick="switchTab('review')">Review</div>
+    <div class="tab" data-tab="export" onclick="switchTab('export')">Export</div>
   </div>
   <div class="header-right" id="headerRight"></div>
 </div>
@@ -338,6 +613,13 @@
       <div class="empty-state">No pending clips. Process some videos first.</div>
     </div>
   </div>
+
+  <!-- ============ EXPORT VIEW ============ -->
+  <div class="view" id="view-export">
+    <div id="exportContent">
+      <div class="empty-state">Loading export data...</div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -348,10 +630,11 @@ function switchTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.querySelector(`.tab:nth-child(${tab === 'process' ? 1 : 2})`).classList.add('active');
+  document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
   document.getElementById('view-' + tab).classList.add('active');
 
   if (tab === 'review') loadClips();
+  if (tab === 'export') loadExportTab();
 }
 
 // ---- Processing ----
@@ -507,6 +790,10 @@ function showClip() {
         </div>
         <span class="trim-indicator" id="trimIndicator"></span>
       </div>
+      <div class="name-section">
+        <span class="trim-label">Name</span>
+        <input type="text" class="clip-name-input" id="clipCustomName" placeholder="Optional custom name for export..." />
+      </div>
       <div class="actions">
         <button class="btn btn-keep" onclick="clipAction('keep')">
           Keep <span class="shortcut">K</span>
@@ -520,7 +807,7 @@ function showClip() {
       </div>
     </div>
     <div class="keyboard-hint">
-      <kbd>K</kbd> keep &nbsp; <kbd>S</kbd> skip &nbsp; <kbd>D</kbd> discard &nbsp; <kbd>Space</kbd> play/pause &nbsp; <kbd>I</kbd> set in &nbsp; <kbd>O</kbd> set out
+      <kbd>K</kbd> keep &nbsp; <kbd>S</kbd> skip &nbsp; <kbd>D</kbd> discard &nbsp; <kbd>Space</kbd> play/pause &nbsp; <kbd>I</kbd> set in &nbsp; <kbd>O</kbd> set out &nbsp; <kbd>N</kbd> focus name
     </div>
   `;
 }
@@ -592,7 +879,8 @@ async function clipAction(type) {
 
     if (needsTrim) showOverlay('Trimming clip...');
 
-    const body = {trim_start: trimStart, trim_end: trimEnd};
+    const customName = document.getElementById('clipCustomName')?.value?.trim() || null;
+    const body = {trim_start: trimStart, trim_end: trimEnd, custom_name: customName};
     const res = await fetch(`/api/clips/${clip.video_stem}/${clip.filename}/keep`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -702,6 +990,599 @@ function fmtTime(seconds) {
   return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
 }
 
+// ---- Export tab ----
+let keptClips = [];
+let encodingPoll = null;
+let uploadPoll = null;
+let ytAuthenticated = false;
+let ytChannelName = '';
+let ytPlaylists = [];
+let encodingPresets = [];
+let encodingFpsOptions = [null, 24, 30, 60];
+let defaultPreset = 'h264_hq';
+
+async function loadExportTab() {
+  try {
+    const [keptRes, presetsRes, ytStatusRes] = await Promise.all([
+      fetch('/api/kept'),
+      fetch('/api/encoding/presets'),
+      fetch('/api/youtube/status'),
+    ]);
+    const keptData = await keptRes.json();
+    keptClips = keptData.clips || [];
+
+    const presetsData = await presetsRes.json();
+    encodingPresets = presetsData.presets || [];
+    defaultPreset = presetsData.default || 'h264_hq';
+    encodingFpsOptions = presetsData.fps_options || [null, 24, 30, 60];
+
+    const ytStatus = await ytStatusRes.json();
+    ytAuthenticated = ytStatus.authenticated || false;
+    ytChannelName = ytStatus.channel_name || '';
+
+    if (ytAuthenticated) {
+      try {
+        const plRes = await fetch('/api/youtube/playlists');
+        const plData = await plRes.json();
+        ytPlaylists = plData.playlists || [];
+      } catch (e) {
+        ytPlaylists = [];
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load export tab data:', e);
+  }
+  renderExportView();
+}
+
+function renderExportView() {
+  let html = '';
+
+  // === Encode Clips Section ===
+  html += `<div class="export-section">`;
+  html += `<h2>Encode Clips</h2>`;
+  html += `<div class="export-toolbar">`;
+  html += `<div class="form-group">`;
+  html += `<label>Preset</label>`;
+  html += `<select class="select-styled" id="encodePreset">`;
+  for (const p of encodingPresets) {
+    const sel = p.name === defaultPreset ? ' selected' : '';
+    html += `<option value="${escapeHtml(p.name)}"${sel}>${escapeHtml(p.display_name)} (${escapeHtml(p.extension)})</option>`;
+  }
+  html += `</select></div>`;
+  html += `<div class="form-group">`;
+  html += `<label>FPS</label>`;
+  html += `<select class="select-styled" id="encodeFps" style="width:100px">`;
+  for (const fps of encodingFpsOptions) {
+    html += `<option value="${fps === null ? '' : fps}">${fps === null ? 'Original' : fps}</option>`;
+  }
+  html += `</select></div>`;
+  html += `<button class="btn-secondary" onclick="toggleAllClips('encode')">Select All</button>`;
+  html += `<button class="btn-process" id="btnEncode" onclick="startEncoding()">Encode Selected</button>`;
+  html += `</div>`;
+
+  // Encode progress area (hidden by default)
+  html += `<div id="encodeProgress" style="display:none">`;
+  html += `<div style="display:flex;align-items:center;gap:12px">`;
+  html += `<span class="progress-label" id="encodeProgressLabel"></span>`;
+  html += `<button class="btn-cancel" onclick="cancelEncoding()">Cancel</button>`;
+  html += `</div>`;
+  html += `<div class="progress-bar"><div class="progress-fill" id="encodeProgressFill"></div></div>`;
+  html += `</div>`;
+
+  // Clip table for encoding
+  if (keptClips.length === 0) {
+    html += `<div class="empty-state" style="padding:40px 0">No kept clips found. Review and keep some clips first.</div>`;
+  } else {
+    html += `<div id="encodeClipList">`;
+    for (let i = 0; i < keptClips.length; i++) {
+      const clip = keptClips[i];
+      const dur = clip.duration ? Math.round(clip.duration) + 's' : '';
+      const stem = clip.video_stem || '';
+      const tags = (clip.detection_reasons || []).map(r =>
+        `<span class="tag tag-${r}">${r.replace('_', ' ')}</span>`
+      ).join('');
+      let badge = '';
+      if (clip.encoded_exists) {
+        badge = `<span class="badge badge-encoded">Encoded</span>`;
+      }
+      html += `<div class="clip-row">`;
+      html += `<input type="checkbox" class="clip-checkbox encode-cb" data-index="${i}" checked>`;
+      html += `<span class="clip-name" title="${escapeHtml(clip.filename)}">${escapeHtml(clip.filename)}</span>`;
+      html += `<span class="clip-detail">${escapeHtml(stem)}</span>`;
+      html += `<span class="clip-detail">${dur}</span>`;
+      html += `<span class="tags" style="margin-bottom:0">${tags}</span>`;
+      html += badge;
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+  html += `</div>`;
+
+  // === YouTube Upload Section ===
+  html += `<div class="export-section">`;
+  html += `<h2>YouTube Upload</h2>`;
+
+  // Auth section
+  if (!ytAuthenticated) {
+    html += `<div class="yt-auth-section">`;
+    html += `<div class="form-group">`;
+    html += `<label>Client ID</label>`;
+    html += `<input type="text" id="ytClientId" placeholder="OAuth Client ID">`;
+    html += `</div>`;
+    html += `<div class="form-group">`;
+    html += `<label>Client Secret</label>`;
+    html += `<input type="password" id="ytClientSecret" placeholder="OAuth Client Secret">`;
+    html += `</div>`;
+    html += `<button class="btn-process" onclick="startYouTubeAuth()">Sign In</button>`;
+    html += `</div>`;
+    html += `<p class="yt-help">Create OAuth credentials at <a href="https://console.cloud.google.com" target="_blank" style="color:#60a5fa">console.cloud.google.com</a></p>`;
+  } else {
+    html += `<div class="yt-connected">`;
+    html += `<span style="color:#888;font-size:13px">Connected as:</span>`;
+    html += `<span class="yt-channel">${escapeHtml(ytChannelName)}</span>`;
+    html += `<button class="btn-signout" onclick="revokeYouTubeAuth()">Sign Out</button>`;
+    html += `</div>`;
+
+    // Batch settings
+    html += `<div class="yt-settings">`;
+    html += `<div class="form-group">`;
+    html += `<label>Privacy</label>`;
+    html += `<select class="select-styled" id="ytPrivacy">`;
+    html += `<option value="private" selected>Private</option>`;
+    html += `<option value="unlisted">Unlisted</option>`;
+    html += `<option value="public">Public</option>`;
+    html += `</select></div>`;
+
+    html += `<div class="form-group">`;
+    html += `<label>Playlist</label>`;
+    html += `<div class="playlist-row">`;
+    html += `<select class="select-styled" id="ytPlaylist">`;
+    html += `<option value="">None</option>`;
+    for (const pl of ytPlaylists) {
+      html += `<option value="${escapeHtml(pl.id)}">${escapeHtml(pl.title)} (${pl.item_count})</option>`;
+    }
+    html += `<option value="__create__">+ Create New...</option>`;
+    html += `</select></div></div>`;
+
+    html += `<div class="form-group">`;
+    html += `<label>Category</label>`;
+    html += `<select class="select-styled" id="ytCategory">`;
+    html += `<option value="20" selected>Gaming</option>`;
+    html += `<option value="24">Entertainment</option>`;
+    html += `<option value="22">People &amp; Blogs</option>`;
+    html += `<option value="17">Sports</option>`;
+    html += `<option value="10">Music</option>`;
+    html += `<option value="1">Film &amp; Animation</option>`;
+    html += `<option value="23">Comedy</option>`;
+    html += `</select></div>`;
+
+    html += `<div class="form-group">`;
+    html += `<label>Tags</label>`;
+    html += `<input type="text" class="title-input" id="ytTags" placeholder="tag1, tag2, tag3" style="width:100%">`;
+    html += `</div>`;
+
+    html += `<div class="form-group full-width">`;
+    html += `<label>Description Template</label>`;
+    html += `<textarea class="textarea-styled" id="ytDescription" placeholder="Enter a description template..."></textarea>`;
+    html += `<div class="template-vars">Variables: <code>{source_video}</code> <code>{start_time}</code> <code>{end_time}</code> <code>{duration}</code> <code>{detection_reasons}</code></div>`;
+    html += `</div>`;
+    html += `</div>`;
+
+    // Upload toolbar
+    html += `<div class="export-toolbar">`;
+    html += `<button class="btn-secondary" onclick="toggleAllClips('upload')">Select All</button>`;
+    html += `<button class="btn-process" id="btnUpload" onclick="startUpload()">Upload Selected</button>`;
+    html += `</div>`;
+
+    // Upload progress area (hidden by default)
+    html += `<div id="uploadProgress" style="display:none">`;
+    html += `<div style="display:flex;align-items:center;gap:12px">`;
+    html += `<span class="progress-label" id="uploadProgressLabel"></span>`;
+    html += `<button class="btn-cancel" onclick="cancelUpload()">Cancel</button>`;
+    html += `</div>`;
+    html += `<div class="progress-bar"><div class="progress-fill" id="uploadProgressFill"></div></div>`;
+    html += `</div>`;
+
+    // Upload clip list
+    if (keptClips.length === 0) {
+      html += `<div class="empty-state" style="padding:40px 0">No kept clips to upload.</div>`;
+    } else {
+      html += `<div id="uploadClipList">`;
+      for (let i = 0; i < keptClips.length; i++) {
+        const clip = keptClips[i];
+        const defaultTitle = clip.custom_name || formatClipTitle(clip.filename);
+        let statusHtml = `<span class="badge badge-ready">Ready</span>`;
+        const alreadyUploaded = !!clip.youtube_url;
+        if (clip.youtube_upload_status === 'failed') {
+          statusHtml = `<span class="badge badge-error">Failed</span>`;
+        } else if (alreadyUploaded) {
+          statusHtml = `<a class="upload-link" href="${escapeHtml(clip.youtube_url)}" target="_blank">Uploaded</a>`;
+        }
+        html += `<div class="clip-row" id="upload-row-${i}">`;
+        html += `<input type="checkbox" class="clip-checkbox upload-cb" data-index="${i}" ${alreadyUploaded ? '' : 'checked'}>`;
+        html += `<span class="clip-detail" style="flex-shrink:0;width:120px" title="${escapeHtml(clip.filename)}">${escapeHtml(clip.filename)}</span>`;
+        html += `<span class="clip-detail" style="margin-right:4px">Title:</span>`;
+        html += `<input type="text" class="title-input upload-title" data-index="${i}" value="${escapeHtml(defaultTitle)}">`;
+        html += statusHtml;
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+  }
+  html += `</div>`;
+
+  document.getElementById('exportContent').innerHTML = html;
+
+  // Attach playlist create handler
+  const plSelect = document.getElementById('ytPlaylist');
+  if (plSelect) {
+    plSelect.addEventListener('change', function() {
+      if (this.value === '__create__') {
+        createPlaylist();
+        this.value = '';
+      }
+    });
+  }
+}
+
+function formatClipTitle(filename) {
+  // Remove extension and replace underscores/hyphens with spaces
+  let title = filename.replace(/\.[^.]+$/, '');
+  title = title.replace(/[_-]/g, ' ');
+  // Title-case first letter
+  return title.charAt(0).toUpperCase() + title.slice(1);
+}
+
+function toggleAllClips(section) {
+  const selector = section === 'encode' ? '.encode-cb' : '.upload-cb';
+  const checkboxes = document.querySelectorAll(selector);
+  if (checkboxes.length === 0) return;
+  // If all are checked, uncheck all; otherwise check all
+  const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+  checkboxes.forEach(cb => cb.checked = !allChecked);
+}
+
+async function startEncoding() {
+  const checkboxes = document.querySelectorAll('.encode-cb:checked');
+  if (checkboxes.length === 0) { alert('Select at least one clip to encode.'); return; }
+
+  const preset = document.getElementById('encodePreset').value;
+  const fpsVal = document.getElementById('encodeFps').value;
+  const fps = fpsVal ? parseInt(fpsVal) : null;
+
+  const clips_to_encode = [];
+  checkboxes.forEach(cb => {
+    const idx = parseInt(cb.dataset.index);
+    const clip = keptClips[idx];
+    if (clip) clips_to_encode.push({video_stem: clip.video_stem, filename: clip.filename});
+  });
+
+  const btn = document.getElementById('btnEncode');
+  btn.disabled = true;
+  btn.textContent = 'Encoding...';
+
+  try {
+    const res = await fetch('/api/encode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({clips: clips_to_encode, preset, target_fps: fps}),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.detail || 'Failed to start encoding');
+      btn.disabled = false;
+      btn.textContent = 'Encode Selected';
+      return;
+    }
+    document.getElementById('encodeProgress').style.display = 'block';
+    encodingPoll = setInterval(pollEncodingStatus, 800);
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = 'Encode Selected';
+  }
+}
+
+async function pollEncodingStatus() {
+  try {
+    const res = await fetch('/api/encode/status');
+    const data = await res.json();
+
+    const label = document.getElementById('encodeProgressLabel');
+    const fill = document.getElementById('encodeProgressFill');
+
+    if (data.total > 0) {
+      // current_index is 1-based from backend
+      const completedCount = (data.completed || []).length;
+      const pct = Math.round((completedCount / data.total) * 100);
+      label.textContent = `Encoding clip ${data.current_index || 0} of ${data.total}: ${data.current_file || ''}`;
+      fill.style.width = pct + '%';
+    }
+
+    if (!data.running) {
+      clearInterval(encodingPoll);
+      encodingPoll = null;
+
+      const btn = document.getElementById('btnEncode');
+      btn.disabled = false;
+      btn.textContent = 'Encode Selected';
+
+      fill.style.width = '100%';
+      if (data.errors && data.errors.length > 0) {
+        label.textContent = `Done with ${data.errors.length} error(s). ${(data.completed || []).length} clip(s) encoded.`;
+      } else {
+        label.textContent = `Encoding complete! ${(data.completed || []).length} clip(s) encoded.`;
+      }
+
+      // Refresh the clip list to show updated badges
+      await loadExportTab();
+    }
+  } catch (e) {
+    console.error('Encoding poll error:', e);
+  }
+}
+
+async function cancelEncoding() {
+  try {
+    await fetch('/api/encode/cancel', {method: 'POST'});
+  } catch (e) {
+    console.error('Cancel encoding error:', e);
+  }
+}
+
+async function startYouTubeAuth() {
+  const clientId = document.getElementById('ytClientId').value.trim();
+  const clientSecret = document.getElementById('ytClientSecret').value.trim();
+  if (!clientId || !clientSecret) {
+    alert('Enter both Client ID and Client Secret.');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/youtube/auth/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({client_id: clientId, client_secret: clientSecret}),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.detail || 'Failed to start auth');
+      return;
+    }
+    const data = await res.json();
+    const authWindow = window.open(data.auth_url, 'youtube-auth', 'width=600,height=700');
+
+    // Listen for auth completion message from popup
+    const authListener = async function(event) {
+      if (event.origin !== window.location.origin) return;
+      if (event.data && event.data.type === 'youtube-auth-success') {
+        window.removeEventListener('message', authListener);
+        // Refresh auth status
+        try {
+          const statusRes = await fetch('/api/youtube/status');
+          const statusData = await statusRes.json();
+          ytAuthenticated = statusData.authenticated || false;
+          ytChannelName = statusData.channel_name || '';
+          if (ytAuthenticated) {
+            const plRes = await fetch('/api/youtube/playlists');
+            const plData = await plRes.json();
+            ytPlaylists = plData.playlists || [];
+          }
+        } catch (e) {
+          console.error('Failed to refresh auth status:', e);
+        }
+        renderExportView();
+      }
+    };
+    window.addEventListener('message', authListener);
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function revokeYouTubeAuth() {
+  if (!confirm('Sign out from YouTube?')) return;
+  try {
+    await fetch('/api/youtube/auth/revoke', {method: 'POST'});
+    ytAuthenticated = false;
+    ytChannelName = '';
+    ytPlaylists = [];
+    renderExportView();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function startUpload() {
+  const checkboxes = document.querySelectorAll('.upload-cb:checked');
+  if (checkboxes.length === 0) { alert('Select at least one clip to upload.'); return; }
+
+  const privacy = document.getElementById('ytPrivacy').value;
+  const playlistId = document.getElementById('ytPlaylist').value;
+  const categoryId = document.getElementById('ytCategory').value;
+  const tags = document.getElementById('ytTags').value.trim();
+  const descTemplate = document.getElementById('ytDescription').value;
+
+  const clipsToUpload = [];
+  checkboxes.forEach(cb => {
+    const idx = parseInt(cb.dataset.index);
+    const clip = keptClips[idx];
+    if (!clip) return;
+    const titleInput = document.querySelector(`.upload-title[data-index="${idx}"]`);
+    const title = titleInput ? titleInput.value.trim() : (clip.custom_name || formatClipTitle(clip.filename));
+
+    // Build description from template
+    let description = descTemplate;
+    description = description.replace(/\{source_video\}/g, clip.source_video || '');
+    description = description.replace(/\{start_time\}/g, clip.start_time ? fmtTime(clip.start_time) : '');
+    description = description.replace(/\{end_time\}/g, clip.end_time ? fmtTime(clip.end_time) : '');
+    description = description.replace(/\{duration\}/g, clip.duration ? Math.round(clip.duration) + 's' : '');
+    description = description.replace(/\{detection_reasons\}/g, (clip.detection_reasons || []).join(', '));
+
+    clipsToUpload.push({
+      video_stem: clip.video_stem,
+      filename: clip.filename,
+      use_encoded: !!clip.encoded_exists,
+      title: title,
+      description: description,
+      tags: tags ? tags.split(',').map(t => t.trim()).filter(t => t) : [],
+      category_id: categoryId,
+      privacy: privacy,
+      playlist_id: playlistId || null,
+    });
+  });
+
+  const btn = document.getElementById('btnUpload');
+  btn.disabled = true;
+  btn.textContent = 'Uploading...';
+
+  try {
+    const res = await fetch('/api/youtube/upload', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({clips: clipsToUpload}),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.detail || 'Failed to start upload');
+      btn.disabled = false;
+      btn.textContent = 'Upload Selected';
+      return;
+    }
+    document.getElementById('uploadProgress').style.display = 'block';
+    uploadPoll = setInterval(pollUploadStatus, 1000);
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = 'Upload Selected';
+  }
+}
+
+async function pollUploadStatus() {
+  try {
+    const res = await fetch('/api/youtube/upload/status');
+    const data = await res.json();
+
+    const label = document.getElementById('uploadProgressLabel');
+    const fill = document.getElementById('uploadProgressFill');
+
+    if (data.total > 0) {
+      const filePct = data.bytes_total > 0
+        ? Math.round((data.bytes_sent / data.bytes_total) * 100)
+        : 0;
+      // Overall progress: completed clips + fractional progress on current clip
+      const completedClips = (data.completed || []).length;
+      const overallPct = Math.round(((completedClips + filePct / 100) / data.total) * 100);
+      label.textContent = `Uploading clip ${data.current_index || 0} of ${data.total}: ${data.current_file || ''} (${filePct}%)`;
+      fill.style.width = overallPct + '%';
+    }
+
+    // Update per-clip statuses
+    if (data.completed) {
+      for (const c of data.completed) {
+        // Find the clip index
+        const idx = keptClips.findIndex(k => k.filename === c.filename);
+        if (idx >= 0) {
+          const row = document.getElementById('upload-row-' + idx);
+          if (row) {
+            const badge = row.querySelector('.badge, .upload-link');
+            if (badge) {
+              badge.outerHTML = `<a class="upload-link" href="${escapeHtml(c.url)}" target="_blank">Uploaded</a>`;
+            }
+          }
+        }
+      }
+    }
+
+    if (!data.running) {
+      clearInterval(uploadPoll);
+      uploadPoll = null;
+
+      const btn = document.getElementById('btnUpload');
+      btn.disabled = false;
+      btn.textContent = 'Upload Selected';
+
+      fill.style.width = '100%';
+      if (data.errors && data.errors.length > 0) {
+        label.textContent = `Done with ${data.errors.length} error(s). ${(data.completed || []).length} clip(s) uploaded.`;
+      } else {
+        label.textContent = `Upload complete! ${(data.completed || []).length} clip(s) uploaded.`;
+      }
+    }
+  } catch (e) {
+    console.error('Upload poll error:', e);
+  }
+}
+
+async function cancelUpload() {
+  try {
+    await fetch('/api/youtube/upload/cancel', {method: 'POST'});
+  } catch (e) {
+    console.error('Cancel upload error:', e);
+  }
+}
+
+async function createPlaylist() {
+  const title = prompt('New playlist title:');
+  if (!title || !title.trim()) {
+    // Reset dropdown to None
+    const plSelect = document.getElementById('ytPlaylist');
+    if (plSelect) plSelect.value = '';
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/youtube/playlists', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({title: title.trim(), privacy: 'private'}),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.detail || 'Failed to create playlist');
+      return;
+    }
+    const newPl = await res.json();
+    ytPlaylists.push(newPl);
+
+    // Refresh playlist dropdown
+    const plSelect = document.getElementById('ytPlaylist');
+    if (plSelect) {
+      // Insert new option before the "Create New..." option
+      const createOpt = plSelect.querySelector('option[value="__create__"]');
+      const newOpt = document.createElement('option');
+      newOpt.value = newPl.id;
+      newOpt.textContent = `${newPl.title} (0)`;
+      plSelect.insertBefore(newOpt, createOpt);
+      plSelect.value = newPl.id;
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+function renderDescriptionPreview() {
+  const descTemplate = document.getElementById('ytDescription');
+  if (!descTemplate) return;
+
+  // Find first checked clip for preview
+  const firstChecked = document.querySelector('.upload-cb:checked');
+  if (!firstChecked) return;
+
+  const idx = parseInt(firstChecked.dataset.index);
+  const clip = keptClips[idx];
+  if (!clip) return;
+
+  let preview = descTemplate.value;
+  preview = preview.replace(/\{source_video\}/g, clip.source_video || '');
+  preview = preview.replace(/\{start_time\}/g, clip.start_time ? fmtTime(clip.start_time) : '');
+  preview = preview.replace(/\{end_time\}/g, clip.end_time ? fmtTime(clip.end_time) : '');
+  preview = preview.replace(/\{duration\}/g, clip.duration ? Math.round(clip.duration) + 's' : '');
+  preview = preview.replace(/\{detection_reasons\}/g, (clip.detection_reasons || []).join(', '));
+  return preview;
+}
+
 // ---- Load defaults ----
 fetch('/api/defaults').then(r => r.json()).then(data => {
   document.getElementById('folderPath').value = data.folder;
@@ -724,6 +1605,7 @@ document.addEventListener('keydown', (e) => {
     case 's': e.preventDefault(); clipAction('skip'); break;
     case 'i': e.preventDefault(); setTrimPoint('in'); break;
     case 'o': e.preventDefault(); setTrimPoint('out'); break;
+    case 'n': e.preventDefault(); const nameInput = document.getElementById('clipCustomName'); if (nameInput) nameInput.focus(); break;
     case ' ':
       e.preventDefault();
       const player = document.getElementById('player');

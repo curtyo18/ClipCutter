@@ -67,3 +67,45 @@ DIR_METADATA = "metadata"
 
 # Supported video extensions
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v"}
+
+# Encoding presets
+DIR_ENCODED = "encoded"
+
+ENCODING_PRESETS = {
+    "copy": {
+        "display_name": "Original (No Re-encode)",
+        "extension": None,  # Keep source extension
+        "ffmpeg_args": [],  # No re-encoding, just copy
+    },
+    "h264_hq": {
+        "display_name": "H.264 High Quality",
+        "extension": ".mp4",
+        "ffmpeg_args": ["-c:v", "libx264", "-preset", "slow", "-crf", "18", "-c:a", "aac", "-b:a", "192k"],
+    },
+    "h264_web": {
+        "display_name": "H.264 Web (Smaller)",
+        "extension": ".mp4",
+        "ffmpeg_args": ["-c:v", "libx264", "-preset", "medium", "-crf", "23", "-c:a", "aac", "-b:a", "128k"],
+    },
+    "h265": {
+        "display_name": "H.265/HEVC",
+        "extension": ".mp4",
+        "ffmpeg_args": ["-c:v", "libx265", "-preset", "medium", "-crf", "22", "-c:a", "aac", "-b:a", "192k", "-tag:v", "hvc1"],
+    },
+    "vp9_webm": {
+        "display_name": "VP9 WebM",
+        "extension": ".webm",
+        "ffmpeg_args": ["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-c:a", "libopus", "-b:a", "128k"],
+    },
+}
+
+DEFAULT_ENCODING_PRESET = "copy"
+DEFAULT_TARGET_FPS = None
+
+# YouTube
+YOUTUBE_CREDENTIALS_FILE = ".youtube_credentials.json"
+YOUTUBE_DEFAULT_PRIVACY = "private"
+YOUTUBE_DEFAULT_CATEGORY = "20"
+YOUTUBE_CHUNK_SIZE_MB = 10
+YOUTUBE_DESCRIPTION_TEMPLATE = "Highlight from {source_video} ({start_time} - {end_time})\nDetected: {detection_reasons}"
+YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube"]

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
 
 class DetectionType(Enum):
@@ -68,9 +68,15 @@ class ClipMetadata:
     detection_reasons: List[str]
     confidence: float
     status: str = "pending"
+    custom_name: Optional[str] = None
+    encoded_filename: Optional[str] = None
+    encoding_preset: Optional[str] = None
+    youtube_video_id: Optional[str] = None
+    youtube_url: Optional[str] = None
+    youtube_upload_status: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "filename": self.filename,
             "source_video": self.source_video,
             "start_time": self.start_time,
@@ -80,6 +86,19 @@ class ClipMetadata:
             "confidence": round(self.confidence, 4),
             "status": self.status,
         }
+        if self.custom_name is not None:
+            d["custom_name"] = self.custom_name
+        if self.encoded_filename is not None:
+            d["encoded_filename"] = self.encoded_filename
+        if self.encoding_preset is not None:
+            d["encoding_preset"] = self.encoding_preset
+        if self.youtube_video_id is not None:
+            d["youtube_video_id"] = self.youtube_video_id
+        if self.youtube_url is not None:
+            d["youtube_url"] = self.youtube_url
+        if self.youtube_upload_status is not None:
+            d["youtube_upload_status"] = self.youtube_upload_status
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "ClipMetadata":
@@ -92,4 +111,10 @@ class ClipMetadata:
             detection_reasons=d["detection_reasons"],
             confidence=d["confidence"],
             status=d.get("status", "pending"),
+            custom_name=d.get("custom_name", None),
+            encoded_filename=d.get("encoded_filename", None),
+            encoding_preset=d.get("encoding_preset", None),
+            youtube_video_id=d.get("youtube_video_id", None),
+            youtube_url=d.get("youtube_url", None),
+            youtube_upload_status=d.get("youtube_upload_status", None),
         )
