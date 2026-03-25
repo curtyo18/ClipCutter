@@ -68,6 +68,12 @@ DIR_METADATA = "metadata"
 # Supported video extensions
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v"}
 
+# Compilations
+DIR_COMPILATIONS = "compilations"
+COMPILATION_CROSSFADE_MIN = 0.1
+COMPILATION_CROSSFADE_MAX = 3.0
+COMPILATION_CROSSFADE_DEFAULT = 0.5
+
 # Encoding presets
 DIR_ENCODED = "encoded"
 

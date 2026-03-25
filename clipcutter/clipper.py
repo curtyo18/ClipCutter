@@ -217,6 +217,17 @@ def extract_clips(video_path: Path, boundaries: List[ClipBoundary],
 
         extract_clip(video_path, boundary.start_time, boundary.end_time, clip_path)
 
+        # Compute highlight regions relative to clip start
+        regions = []
+        for h in boundary.highlights:
+            offset = h.timestamp - boundary.start_time
+            regions.append({
+                "offset": round(max(0.0, offset), 4),
+                "duration": round(h.duration, 4),
+                "type": h.detection_type.value,
+                "confidence": round(h.confidence, 4),
+            })
+
         meta = ClipMetadata(
             filename=filename,
             source_video=video_path.name,
@@ -225,6 +236,7 @@ def extract_clips(video_path: Path, boundaries: List[ClipBoundary],
             duration=boundary.duration,
             detection_reasons=boundary.detection_reasons,
             confidence=boundary.confidence,
+            highlight_regions=regions,
         )
         metadata_list.append(meta)
 

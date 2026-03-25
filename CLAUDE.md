@@ -26,14 +26,15 @@ clipcutter/
   detector.py   # 4 detectors (volume/laughter/shouting/noise) + scoring
   clipper.py    # Clip boundaries, merging, silence trim, extraction
   metadata.py   # JSON read/write/update
-  models.py     # Dataclasses: Highlight, ClipBoundary, ClipMetadata
+  models.py     # Dataclasses: Highlight, ClipBoundary, ClipMetadata, CompilationMetadata
   config.py     # All tunable constants + encoding presets
   encoder.py    # FFmpeg encoding: presets (original/high/low/gif+slowdown)
+  compiler.py   # Compilation builder: concat demuxer or xfade/acrossfade filter chains
   youtube.py    # YouTube Data API v3: OAuth2, upload, playlists
   reviewer.py   # Terminal-based keep/discard review
-  web.py        # FastAPI app: 29 endpoints (process, review, encode, upload, OAuth)
+  web.py        # FastAPI app: 36 endpoints (process, review, waveform, compile, encode, upload, OAuth)
   static/
-    index.html  # SPA with Process + Review + Export tabs (dark theme)
+    index.html  # SPA with Process + Review + Export tabs (dark theme, waveform canvas, compilation UI)
 ```
 
 ## Output Structure
@@ -43,7 +44,8 @@ output/
   clips/pending/<video_stem>/   # Awaiting review
   clips/kept/<video_stem>/      # Approved clips (uncompressed)
   clips/encoded/<video_stem>/   # Encoded/re-encoded clips
-  metadata/<video_stem>_clips.json  # Metadata with custom_name, encoding, YouTube status
+  clips/compilations/           # Built compilations (concat or crossfade)
+  metadata/<video_stem>_clips.json  # Metadata with custom_name, encoding, YouTube status, highlight_regions
   .youtube_credentials.json     # OAuth tokens (gitignored)
 ```
 
@@ -57,10 +59,12 @@ output/
 - **Encoding presets**: 4 options — `original` (copy, default), `high` (H.264 crf18), `low` (H.264 crf26), `gif` (animated GIF, no sound, optional slowdown via `setpts`). H.265/VP9 removed (codec availability issues on Windows).
 - **GIF slowdown**: `slowdown_factor` param (0.25–1.0) only applies to GIF preset. Woven into FFmpeg palette filter chain.
 - **YouTube OAuth**: Credentials stored in `output/.youtube_credentials.json` (dotfile, gitignored). Resumable chunked upload with progress tracking.
+- **Waveform visualization**: FFmpeg pipes raw s16le audio → numpy RMS downsampled to ~200 bins → normalized [0,1]. Cached as `.waveform.json` sidecar next to clip. Canvas renders with `devicePixelRatio` scaling, `requestAnimationFrame` cursor sync, click-to-seek, and trim marker overlays. `highlight_regions` from detection metadata shown as colored overlays.
+- **Compilation builder**: Drag-and-drop clip ordering in Export tab. Hard cut uses FFmpeg concat demuxer; crossfade chains `xfade`+`acrossfade` filters with cumulative offset tracking. Runs in background thread with polling (same pattern as encode/upload). Compilations stored in `clips/compilations/` with `comp_*.json` metadata.
 
 ## Testing
 
-32 tests: API tests (TestClient) + browser tests (Playwright/headless Chromium). Temp files cleaned up after each test. YouTube skipped (external dep).
+34 tests: API tests (TestClient) + browser tests (Playwright/headless Chromium). Temp files cleaned up after each test. YouTube skipped (external dep).
 
 ```bash
 pytest tests/ -v                    # Full suite (~42s)

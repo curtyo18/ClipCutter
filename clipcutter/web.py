@@ -1,18 +1,21 @@
 """Web UI for clip processing and review."""
 
+import json
 import shutil
 import subprocess
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from clipcutter.config import (
-    DIR_CLIPS, DIR_ENCODED, DIR_KEPT, DIR_METADATA, DIR_PENDING,
+    DIR_CLIPS, DIR_COMPILATIONS, DIR_ENCODED, DIR_KEPT, DIR_METADATA, DIR_PENDING,
     YOUTUBE_CREDENTIALS_FILE, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_DEFAULT_PRIVACY,
 )
 from clipcutter.metadata import (
@@ -71,6 +74,67 @@ class YouTubeBatchUploadRequest(BaseModel):
 class PlaylistCreateRequest(BaseModel):
     title: str
     privacy: str = "private"
+
+
+class CompilationClipRef(BaseModel):
+    video_stem: str
+    filename: str
+
+
+class CompilationRequest(BaseModel):
+    clips: List[CompilationClipRef]
+    transition: str = "cut"
+    crossfade_duration: float = 0.5
+    preset: str = "high"
+    title: Optional[str] = None
+
+
+class CompilationState:
+    """Thread-safe compilation build state."""
+
+    def __init__(self):
+        self.running = False
+        self.current_step: str = ""
+        self.progress_pct: float = 0
+        self.completed = False
+        self.error: Optional[str] = None
+        self.output_filename: Optional[str] = None
+        self.cancelled = False
+        self._lock = threading.Lock()
+
+    def reset(self):
+        with self._lock:
+            self.running = True
+            self.current_step = "Starting..."
+            self.progress_pct = 0
+            self.completed = False
+            self.error = None
+            self.output_filename = None
+            self.cancelled = False
+
+    def update(self, step: str, pct: float):
+        with self._lock:
+            self.current_step = step
+            self.progress_pct = pct
+
+    def finish(self, filename: Optional[str] = None, error: Optional[str] = None):
+        with self._lock:
+            self.running = False
+            self.completed = error is None
+            self.error = error
+            self.output_filename = filename
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "running": self.running,
+                "current_step": self.current_step,
+                "progress_pct": self.progress_pct,
+                "completed": self.completed,
+                "error": self.error,
+                "output_filename": self.output_filename,
+                "cancelled": self.cancelled,
+            }
 
 
 class EncodingState:
@@ -296,6 +360,16 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
     proc_state = ProcessingState()
     enc_state = EncodingState()
     upl_state = UploadState()
+    comp_state = CompilationState()
+    def _sanitize_filename(name: str) -> str:
+        """Strip unsafe chars, replace spaces with underscores."""
+        safe = "".join(c for c in name if c.isalnum() or c in " _-").strip()
+        return safe.replace(" ", "_")
+
+    def _media_type(filename: str) -> str:
+        ext = Path(filename).suffix.lower()
+        return {"webm": "video/webm", ".gif": "image/gif"}.get(ext, "video/mp4")
+
     launch_cwd = cwd or str(Path.cwd())
 
     # Clean up stale files in pending that have already been kept/discarded
@@ -402,6 +476,7 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
                     "detection_reasons": clip.detection_reasons,
                     "confidence": clip.confidence,
                     "video_url": f"/video/{video_stem}/{clip.filename}",
+                    "highlight_regions": clip.highlight_regions or [],
                 })
 
         clips.sort(key=lambda c: -c["confidence"])
@@ -416,11 +491,98 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
             clip_path = output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / filename
         if not clip_path.exists():
             raise HTTPException(404, "Clip not found")
-        # Determine media type from extension
-        media_type = "video/mp4"
-        if filename.endswith(".webm"):
-            media_type = "video/webm"
-        return FileResponse(clip_path, media_type=media_type)
+        return FileResponse(clip_path, media_type=_media_type(filename))
+
+    @app.get("/api/waveform/{video_stem}/{filename}")
+    def get_waveform(video_stem: str, filename: str, bars: int = 300):
+        """Return downsampled RMS waveform data + highlight regions for a clip."""
+        # Find clip file
+        clip_path = output_dir / DIR_CLIPS / DIR_PENDING / video_stem / filename
+        if not clip_path.exists():
+            clip_path = output_dir / DIR_CLIPS / DIR_KEPT / video_stem / filename
+        if not clip_path.exists():
+            raise HTTPException(404, "Clip not found")
+
+        # Check for cached waveform sidecar
+        cache_path = clip_path.with_suffix(clip_path.suffix + ".waveform.json")
+        if cache_path.exists():
+            try:
+                cached = json.loads(cache_path.read_text())
+                # Attach highlight regions from metadata
+                cached["highlight_regions"] = _get_highlight_regions(
+                    output_dir, video_stem, filename
+                )
+                return cached
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        # Extract audio via FFmpeg and compute RMS
+        try:
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-i", str(clip_path), "-vn",
+                    "-acodec", "pcm_s16le", "-ar", "22050", "-ac", "1",
+                    "-f", "s16le", "pipe:1",
+                ],
+                capture_output=True, timeout=30,
+            )
+            if result.returncode != 0:
+                raise HTTPException(500, "FFmpeg audio extraction failed")
+
+            samples = np.frombuffer(
+                result.stdout, dtype=np.int16
+            ).astype(np.float32) / 32768.0
+
+            if len(samples) == 0:
+                raise HTTPException(500, "No audio data extracted")
+
+            num_bars = min(bars, len(samples))
+            chunk_size = max(1, len(samples) // num_bars)
+            waveform = []
+            for i in range(0, len(samples), chunk_size):
+                chunk = samples[i : i + chunk_size]
+                rms = float(np.sqrt(np.mean(chunk ** 2)))
+                waveform.append(round(rms, 4))
+
+            # Normalize to [0, 1]
+            max_val = max(waveform) if waveform else 1.0
+            if max_val > 0:
+                waveform = [round(v / max_val, 4) for v in waveform]
+
+            duration = len(samples) / 22050.0
+            data = {
+                "waveform": waveform,
+                "duration": round(duration, 3),
+                "sample_count": len(waveform),
+            }
+
+            # Cache to sidecar file
+            try:
+                cache_path.write_text(json.dumps(data))
+            except OSError:
+                pass
+
+            data["highlight_regions"] = _get_highlight_regions(
+                output_dir, video_stem, filename
+            )
+            return data
+
+        except subprocess.TimeoutExpired:
+            raise HTTPException(500, "Waveform extraction timed out")
+
+    def _get_highlight_regions(out_dir: Path, video_stem: str, filename: str):
+        """Load highlight_regions for a clip from its metadata file."""
+        meta_path = out_dir / DIR_METADATA / f"{video_stem}_clips.json"
+        if not meta_path.exists():
+            return []
+        try:
+            clip_metas = load_metadata(meta_path)
+            for clip in clip_metas:
+                if clip.filename == filename:
+                    return clip.highlight_regions or []
+        except Exception:
+            pass
+        return []
 
     @app.post("/api/clips/{video_stem}/{filename}/keep")
     def keep_clip(video_stem: str, filename: str, req: KeepRequest = None):
@@ -685,13 +847,9 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
                     clip_metas_local = load_metadata(meta_path)
                     for cm in clip_metas_local:
                         if cm.filename == clip_ref.filename and cm.custom_name:
-                            # Sanitize: remove unsafe chars, keep it filesystem-safe
-                            safe = "".join(
-                                c for c in cm.custom_name
-                                if c.isalnum() or c in " _-"
-                            ).strip()
-                            if safe:
-                                custom_stem = safe.replace(" ", "_")
+                            sanitized = _sanitize_filename(cm.custom_name)
+                            if sanitized:
+                                custom_stem = sanitized
                             break
 
                 stem = custom_stem or Path(clip_ref.filename).stem
@@ -726,10 +884,172 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
         clip_path = output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / filename
         if not clip_path.exists():
             raise HTTPException(404, "Encoded clip not found")
-        media_type = "video/mp4"
-        if filename.endswith(".webm"):
-            media_type = "video/webm"
-        return FileResponse(clip_path, media_type=media_type)
+        return FileResponse(clip_path, media_type=_media_type(filename))
+
+    # ------------------------------------------------------------------
+    # Compilation API
+    # ------------------------------------------------------------------
+
+    @app.post("/api/compilation")
+    def start_compilation(req: CompilationRequest):
+        if comp_state.running:
+            raise HTTPException(409, "Compilation already in progress")
+        if len(req.clips) < 2:
+            raise HTTPException(400, "Need at least 2 clips for a compilation")
+
+        # Resolve clip paths (prefer encoded, fall back to kept)
+        clip_paths = []
+        for ref in req.clips:
+            # Try encoded first
+            enc_dir = output_dir / DIR_CLIPS / DIR_ENCODED / ref.video_stem
+            kept_path = output_dir / DIR_CLIPS / DIR_KEPT / ref.video_stem / ref.filename
+            found = None
+
+            if enc_dir.exists():
+                meta_path = output_dir / DIR_METADATA / f"{ref.video_stem}_clips.json"
+                if meta_path.exists():
+                    clip_metas = load_metadata(meta_path)
+                    for cm in clip_metas:
+                        if cm.filename == ref.filename and cm.encoded_filename:
+                            enc_path = enc_dir / cm.encoded_filename
+                            if enc_path.exists():
+                                found = enc_path
+                            break
+
+            if found is None:
+                if kept_path.exists():
+                    found = kept_path
+                else:
+                    raise HTTPException(404, f"Clip not found: {ref.video_stem}/{ref.filename}")
+
+            clip_paths.append(found)
+
+        comp_state.reset()
+
+        comp_id = f"comp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        def run():
+            from clipcutter.compiler import build_compilation
+            from clipcutter.audio import get_video_duration
+
+            try:
+                comp_state.update("Getting clip durations...", 10)
+
+                durations = [get_video_duration(p) for p in clip_paths]
+                total_dur = sum(durations)
+                if req.transition == "crossfade":
+                    total_dur -= (len(durations) - 1) * req.crossfade_duration
+
+                comp_state.update("Building compilation...", 30)
+
+                comp_dir = output_dir / DIR_CLIPS / DIR_COMPILATIONS
+                comp_dir.mkdir(parents=True, exist_ok=True)
+
+                # Build output filename
+                safe_title = _sanitize_filename(req.title) if req.title else ""
+                if not safe_title:
+                    safe_title = comp_id
+                out_name = f"{safe_title}.mp4"
+                out_path = comp_dir / out_name
+
+                build_compilation(
+                    clip_paths, out_path,
+                    transition=req.transition,
+                    crossfade_duration=req.crossfade_duration,
+                )
+
+                comp_state.update("Saving metadata...", 90)
+
+                # Save compilation metadata
+                from clipcutter.models import CompilationMetadata
+                meta = CompilationMetadata(
+                    compilation_id=comp_id,
+                    filename=out_name,
+                    created_at=datetime.now().isoformat(timespec="seconds"),
+                    clips=[
+                        {"video_stem": ref.video_stem, "filename": ref.filename,
+                         "duration": round(dur, 2)}
+                        for ref, dur in zip(req.clips, durations)
+                    ],
+                    transition=req.transition,
+                    crossfade_duration=req.crossfade_duration if req.transition == "crossfade" else None,
+                    encoding_preset=req.preset,
+                    total_duration=round(total_dur, 2),
+                    status="complete",
+                )
+
+                meta_dir = output_dir / DIR_METADATA
+                meta_dir.mkdir(parents=True, exist_ok=True)
+                meta_path = meta_dir / f"{comp_id}.json"
+                meta_path.write_text(
+                    json.dumps(meta.to_dict(), indent=2), encoding="utf-8"
+                )
+
+                comp_state.finish(filename=out_name)
+
+            except Exception as exc:
+                comp_state.finish(error=str(exc))
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"status": "started", "compilation_id": comp_id}
+
+    @app.get("/api/compilation/status")
+    def compilation_status():
+        return comp_state.snapshot()
+
+    @app.post("/api/compilation/cancel")
+    def cancel_compilation():
+        comp_state.cancelled = True
+        return {"status": "cancelling"}
+
+    @app.get("/api/compilations")
+    def list_compilations():
+        """List all completed compilations."""
+        meta_dir = output_dir / DIR_METADATA
+        comp_dir = output_dir / DIR_CLIPS / DIR_COMPILATIONS
+        comps = []
+
+        if not meta_dir.exists():
+            return {"compilations": []}
+
+        for meta_path in sorted(meta_dir.glob("comp_*.json")):
+            try:
+                data = json.loads(meta_path.read_text(encoding="utf-8"))
+                # Check if file still exists
+                if comp_dir.exists():
+                    file_exists = (comp_dir / data.get("filename", "")).exists()
+                else:
+                    file_exists = False
+                data["file_exists"] = file_exists
+                comps.append(data)
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        return {"compilations": comps}
+
+    @app.delete("/api/compilation/{compilation_id}")
+    def delete_compilation(compilation_id: str):
+        meta_path = output_dir / DIR_METADATA / f"{compilation_id}.json"
+        if not meta_path.exists():
+            raise HTTPException(404, "Compilation not found")
+
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+            video_path = output_dir / DIR_CLIPS / DIR_COMPILATIONS / data.get("filename", "")
+            if video_path.exists():
+                video_path.unlink()
+        except Exception:
+            pass
+
+        meta_path.unlink()
+        return {"status": "deleted"}
+
+    @app.get("/video/compilation/{filename}")
+    def serve_compilation(filename: str):
+        clip_path = output_dir / DIR_CLIPS / DIR_COMPILATIONS / filename
+        if not clip_path.exists():
+            raise HTTPException(404, "Compilation not found")
+        return FileResponse(clip_path, media_type=_media_type(filename))
 
     # ------------------------------------------------------------------
     # YouTube API

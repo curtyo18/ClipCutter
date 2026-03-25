@@ -74,6 +74,7 @@ class ClipMetadata:
     youtube_video_id: Optional[str] = None
     youtube_url: Optional[str] = None
     youtube_upload_status: Optional[str] = None
+    highlight_regions: Optional[List[dict]] = None
 
     def to_dict(self) -> dict:
         d = {
@@ -98,6 +99,8 @@ class ClipMetadata:
             d["youtube_url"] = self.youtube_url
         if self.youtube_upload_status is not None:
             d["youtube_upload_status"] = self.youtube_upload_status
+        if self.highlight_regions is not None:
+            d["highlight_regions"] = self.highlight_regions
         return d
 
     @classmethod
@@ -117,4 +120,61 @@ class ClipMetadata:
             youtube_video_id=d.get("youtube_video_id", None),
             youtube_url=d.get("youtube_url", None),
             youtube_upload_status=d.get("youtube_upload_status", None),
+            highlight_regions=d.get("highlight_regions", None),
+        )
+
+
+@dataclass
+class CompilationMetadata:
+    """Metadata for a compiled video."""
+    compilation_id: str
+    filename: str
+    created_at: str
+    clips: List[dict]  # [{video_stem, filename, custom_name, duration}]
+    transition: str  # "cut" or "crossfade"
+    crossfade_duration: Optional[float] = None
+    encoding_preset: Optional[str] = None
+    total_duration: float = 0.0
+    status: str = "pending"
+    error: Optional[str] = None
+    youtube_video_id: Optional[str] = None
+    youtube_url: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        d = {
+            "compilation_id": self.compilation_id,
+            "filename": self.filename,
+            "created_at": self.created_at,
+            "clips": self.clips,
+            "transition": self.transition,
+            "total_duration": self.total_duration,
+            "status": self.status,
+        }
+        if self.crossfade_duration is not None:
+            d["crossfade_duration"] = self.crossfade_duration
+        if self.encoding_preset is not None:
+            d["encoding_preset"] = self.encoding_preset
+        if self.error is not None:
+            d["error"] = self.error
+        if self.youtube_video_id is not None:
+            d["youtube_video_id"] = self.youtube_video_id
+        if self.youtube_url is not None:
+            d["youtube_url"] = self.youtube_url
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CompilationMetadata":
+        return cls(
+            compilation_id=d["compilation_id"],
+            filename=d["filename"],
+            created_at=d["created_at"],
+            clips=d["clips"],
+            transition=d["transition"],
+            crossfade_duration=d.get("crossfade_duration"),
+            encoding_preset=d.get("encoding_preset"),
+            total_duration=d.get("total_duration", 0.0),
+            status=d.get("status", "pending"),
+            error=d.get("error"),
+            youtube_video_id=d.get("youtube_video_id"),
+            youtube_url=d.get("youtube_url"),
         )
