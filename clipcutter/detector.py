@@ -12,6 +12,9 @@ from clipcutter.config import (
     LAUGHTER_AUTOCORR_MAX_FREQ,
     LAUGHTER_AUTOCORR_MIN_FREQ,
     LAUGHTER_AUTOCORR_THRESHOLD,
+    LAUGHTER_CENTROID_FLOOR_RATIO,
+    LAUGHTER_ENERGY_FLOOR_RATIO,
+    LAUGHTER_MFCC_VARIANCE_THRESHOLD,
     LAUGHTER_MIN_DURATION_SECONDS,
     MAX_CLIPS_PER_VIDEO,
     MIN_CONFIDENCE_THRESHOLD,
@@ -128,14 +131,19 @@ def _detect_laughter(features: AudioFeatures,
     min_lag = max(1, int(sr / (hop * LAUGHTER_AUTOCORR_MAX_FREQ)))
     max_lag = int(sr / (hop * LAUGHTER_AUTOCORR_MIN_FREQ))
 
+    # Pre-compute per-frame MFCC delta magnitude for spectral variability check
+    mfcc_delta = np.diff(features.mfccs, axis=1)
+    mfcc_delta_mag = np.sqrt(np.sum(mfcc_delta ** 2, axis=0))
+    mfcc_delta_median = float(np.median(mfcc_delta_mag)) + 1e-10
+
     flagged_windows = []  # (start_frame, end_frame, score)
 
     for start in range(0, len(rms) - win_frames + 1, hop_frames):
         end = start + win_frames
         window_rms = rms[start:end]
 
-        # Skip low-energy windows
-        if np.mean(window_rms) < median_energy * 0.5:
+        # Energy floor: laughter is louder than average
+        if np.mean(window_rms) < median_energy * LAUGHTER_ENERGY_FLOOR_RATIO:
             continue
 
         # Autocorrelation of RMS envelope in this window
@@ -155,10 +163,18 @@ def _detect_laughter(features: AudioFeatures,
         if peak_val < threshold:
             continue
 
-        # Check spectral centroid is elevated (laughter has higher freq content)
+        # Spectral centroid must be meaningfully elevated (not just above median)
         window_centroid = np.mean(features.spectral_centroid[start:end])
-        if window_centroid < median_centroid:
+        if window_centroid < median_centroid * LAUGHTER_CENTROID_FLOOR_RATIO:
             continue
+
+        # MFCC variability check: laughter has rapid spectral changes
+        # unlike steady-state music or game ambience
+        delta_end = min(end, len(mfcc_delta_mag))
+        if delta_end > start:
+            window_mfcc_var = float(np.mean(mfcc_delta_mag[start:delta_end]))
+            if window_mfcc_var < mfcc_delta_median * LAUGHTER_MFCC_VARIANCE_THRESHOLD:
+                continue
 
         energy_ratio = float(np.mean(window_rms) / (median_energy + 1e-10))
         score = peak_val * energy_ratio
