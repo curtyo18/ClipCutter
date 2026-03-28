@@ -1119,11 +1119,11 @@ async function clipAction(type) {
   if (type === 'keep') {
     const trimStart = parseTrimTime(document.getElementById('trimIn')?.value || '0');
     const trimEnd = parseTrimTime(document.getElementById('trimOut')?.value || '0');
+    const customName = document.getElementById('clipCustomName')?.value?.trim() || null;
     const needsTrim = trimStart > 0.1 || (clip.duration - trimEnd) > 0.1;
 
     if (needsTrim) showOverlay('Trimming clip...');
-
-    const customName = document.getElementById('clipCustomName')?.value?.trim() || null;
+    else showOverlay('Saving clip...');
     const body = {trim_start: trimStart, trim_end: trimEnd, custom_name: customName};
     const res = await fetch(`/api/clips/${clip.video_stem}/${clip.filename}/keep`, {
       method: 'POST',
