@@ -53,3 +53,7 @@ __pycache__
 
 # YouTube OAuth credentials (sensitive)
 .youtube_credentials.json
+
+# Vite frontend build artifacts
+clipcutter/static/node_modules/
+clipcutter/static/dist/
