@@ -157,6 +157,37 @@ class TestTrimAndCustomName:
         meta = _load_meta(output_dir, stem)
         assert meta["clips"][0]["custom_name"] == "Trimmed"
 
+    def test_no_trim_when_needs_trim_false(self, output_dir, app_client):
+        """Regression test: needs_trim=False should not trigger re-encode.
+
+        Even with a large non-zero trim_end value, if needs_trim is False,
+        the response should show trimmed: false and no FFmpeg re-encoding.
+        """
+        stem = "notrimvid"
+        clip = create_pending_clip(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/notrimvid.mp4",
+            start=0.0, end=20.0,  # 20s clip to allow trim_end=15.0
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/notrimvid.mp4")
+
+        resp = app_client.post(
+            f"/api/clips/{stem}/clip_001.mp4/keep",
+            json={
+                "trim_start": 0.0,
+                "trim_end": 15.0,  # Large non-zero value
+                "needs_trim": False,  # But needs_trim is explicitly False
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "kept"
+        assert data["trimmed"] is False  # Should NOT trigger re-encode
+
+        # Verify kept file exists
+        kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
+        assert kept_path.exists()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
