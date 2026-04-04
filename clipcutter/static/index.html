@@ -1124,7 +1124,7 @@ async function clipAction(type) {
 
     if (needsTrim) showOverlay('Trimming clip...');
     else showOverlay('Saving clip...');
-    const body = {trim_start: trimStart, trim_end: trimEnd, custom_name: customName};
+    const body = {trim_start: trimStart, trim_end: trimEnd, needs_trim: needsTrim, custom_name: customName};
     const res = await fetch(`/api/clips/${clip.video_stem}/${clip.filename}/keep`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},

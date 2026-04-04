@@ -140,6 +140,7 @@ class TestTrimAndCustomName:
             json={
                 "trim_start": 0.0,
                 "trim_end": 1.0,
+                "needs_trim": True,
                 "custom_name": "Trimmed",
             },
         )

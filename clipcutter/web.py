@@ -35,6 +35,7 @@ class ProcessRequest(BaseModel):
 class KeepRequest(BaseModel):
     trim_start: float = 0.0
     trim_end: float = 0.0
+    needs_trim: bool = False
     custom_name: Optional[str] = None
 
 
@@ -596,7 +597,7 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
         kept_dir.mkdir(parents=True, exist_ok=True)
         dest = kept_dir / filename
 
-        needs_trim = req and (req.trim_start > 0.1 or req.trim_end > 0.1)
+        needs_trim = req and req.needs_trim
 
         if needs_trim:
             duration = req.trim_end - req.trim_start
