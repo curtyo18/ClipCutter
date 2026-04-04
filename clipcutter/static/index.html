@@ -1115,6 +1115,8 @@ function hideOverlay() {
 
 async function clipAction(type) {
   const clip = clips[currentIndex];
+  const player = document.getElementById('player');
+  if (player) player.pause();
 
   if (type === 'keep') {
     const trimStart = parseTrimTime(document.getElementById('trimIn')?.value || '0');
@@ -1340,7 +1342,7 @@ function renderExportView() {
       }
       html += `<div class="clip-row">`;
       html += `<input type="checkbox" class="clip-checkbox encode-cb" data-index="${i}" checked>`;
-      html += `<span class="clip-name" title="${escapeHtml(clip.filename)}">${escapeHtml(clip.filename)}</span>`;
+      html += `<span class="clip-name" title="${escapeHtml(clip.filename)}">${escapeHtml(clip.custom_name || clip.filename)}</span>`;
       html += `<span class="clip-detail">${escapeHtml(stem)}</span>`;
       html += `<span class="clip-detail">${dur}</span>`;
       html += `<span class="tags" style="margin-bottom:0">${tags}</span>`;
