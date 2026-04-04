@@ -11,15 +11,18 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from clipcutter.config import DIR_CLIPS, DIR_ENCODED, DIR_KEPT, DIR_METADATA, DIR_PENDING
-from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_status
+from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_custom_name, update_clip_status
 from clipcutter.routes._helpers import _media_type
 from clipcutter.state import AppState
 
 
+class Segment(BaseModel):
+    start: float
+    end: float
+
+
 class KeepRequest(BaseModel):
-    trim_start: float = 0.0
-    trim_end: float = 0.0
-    needs_trim: bool = False
+    segments: list[Segment] = []
     custom_name: Optional[str] = None
 
 
@@ -173,44 +176,92 @@ def create_router(state: AppState) -> APIRouter:
         if not clip_path.exists():
             raise HTTPException(404, "Clip not found")
 
+        # Normalise segments: use full clip if none provided
+        segments = req.segments if req and req.segments else []
+        # Determine clip duration from the file (needed to detect full-clip case)
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(clip_path)],
+            capture_output=True, text=True,
+        )
+        clip_duration = 0.0
+        try:
+            probe_data = json.loads(probe.stdout)
+            clip_duration = float(probe_data.get("format", {}).get("duration", 0))
+        except Exception:
+            pass
+
+        if not segments:
+            segments = [Segment(start=0.0, end=clip_duration or 9999.0)]
+
+        # Sort and validate
+        segments = sorted(segments, key=lambda s: s.start)
+        for seg in segments:
+            if seg.end - seg.start < 1.0:
+                raise HTTPException(400, f"Segment {seg.start:.1f}-{seg.end:.1f} is too short (min 1s)")
+
         kept_dir = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem
         kept_dir.mkdir(parents=True, exist_ok=True)
         dest = kept_dir / filename
 
-        needs_trim = req and req.needs_trim
+        is_full_clip = (
+            len(segments) == 1
+            and segments[0].start <= 0.1
+            and (clip_duration == 0 or (clip_duration - segments[0].end) <= 0.1)
+        )
 
-        if needs_trim:
-            duration = req.trim_end - req.trim_start
-            if duration < 1:
-                raise HTTPException(400, "Trimmed clip would be too short")
-            result = subprocess.run(
-                [
-                    "ffmpeg", "-y",
-                    "-ss", f"{req.trim_start:.3f}",
-                    "-i", str(clip_path),
-                    "-t", f"{duration:.3f}",
-                    "-c:v", "libx264", "-c:a", "aac",
-                    "-avoid_negative_ts", "make_zero",
-                    str(dest),
-                ],
-                capture_output=True, text=True,
-            )
-            if result.returncode != 0:
-                raise HTTPException(500, f"FFmpeg failed: {result.stderr[-200:]}")
-        else:
+        if is_full_clip:
+            # No re-encode needed
             try:
                 shutil.copy2(str(clip_path), str(dest))
             except OSError:
                 pass
+            trimmed = False
+        elif len(segments) == 1:
+            # Single segment trim
+            seg = segments[0]
+            duration = seg.end - seg.start
+            result = subprocess.run(
+                ["ffmpeg", "-y",
+                 "-ss", f"{seg.start:.3f}",
+                 "-i", str(clip_path),
+                 "-t", f"{duration:.3f}",
+                 "-c:v", "libx264", "-c:a", "aac",
+                 "-avoid_negative_ts", "make_zero",
+                 str(dest)],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                raise HTTPException(500, f"FFmpeg failed: {result.stderr[-200:]}")
+            trimmed = True
+        else:
+            # Multiple segments: use concat filter
+            inputs = []
+            for seg in segments:
+                inputs += ["-ss", f"{seg.start:.3f}", "-t", f"{seg.end - seg.start:.3f}", "-i", str(clip_path)]
+
+            n = len(segments)
+            filter_inputs = "".join(f"[{i}:v][{i}:a]" for i in range(n))
+            filter_complex = f"{filter_inputs}concat=n={n}:v=1:a=1[v][a]"
+
+            result = subprocess.run(
+                ["ffmpeg", "-y"]
+                + inputs
+                + ["-filter_complex", filter_complex,
+                   "-map", "[v]", "-map", "[a]",
+                   "-c:v", "libx264", "-c:a", "aac",
+                   str(dest)],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                raise HTTPException(500, f"FFmpeg failed: {result.stderr[-200:]}")
+            trimmed = True
 
         update_clip_status(meta_path, filename, "kept")
 
-        # Store custom name in metadata (no file rename to avoid locking)
         if req and req.custom_name and req.custom_name.strip():
-            from clipcutter.metadata import update_clip_custom_name
             update_clip_custom_name(meta_path, filename, req.custom_name.strip())
 
-        return {"status": "kept", "trimmed": bool(needs_trim)}
+        return {"status": "kept", "trimmed": trimmed}
 
     @router.post("/api/clips/{video_stem}/{filename}/discard")
     def discard_clip(video_stem: str, filename: str):

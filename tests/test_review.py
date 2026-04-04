@@ -19,7 +19,7 @@ class TestKeepClip:
 
         resp = app_client.post(
             f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={"custom_name": "test_clip", "trim_start": 0.0, "trim_end": 0.0},
+            json={"custom_name": "test_clip", "segments": []},
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "kept"
@@ -44,7 +44,7 @@ class TestKeepClip:
 
         app_client.post(
             f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={"trim_start": 0.0, "trim_end": 0.0},
+            json={"segments": []},
         )
 
         kept_resp = app_client.get("/api/kept")
@@ -105,7 +105,7 @@ class TestKeepDiscardMix:
 
         # Keep first, discard others
         app_client.post(f"/api/clips/{stem}/clip_000.mp4/keep",
-                        json={"trim_start": 0.0, "trim_end": 0.0})
+                        json={"segments": []})
         app_client.post(f"/api/clips/{stem}/clip_001.mp4/discard")
         app_client.post(f"/api/clips/{stem}/clip_002.mp4/discard")
 
@@ -138,9 +138,7 @@ class TestTrimAndCustomName:
         resp = app_client.post(
             f"/api/clips/{stem}/clip_001.mp4/keep",
             json={
-                "trim_start": 0.0,
-                "trim_end": 1.0,
-                "needs_trim": True,
+                "segments": [{"start": 1.0, "end": 9.0}],
                 "custom_name": "Trimmed",
             },
         )
@@ -157,32 +155,24 @@ class TestTrimAndCustomName:
         meta = _load_meta(output_dir, stem)
         assert meta["clips"][0]["custom_name"] == "Trimmed"
 
-    def test_no_trim_when_needs_trim_false(self, output_dir, app_client):
-        """Regression test: needs_trim=False should not trigger re-encode.
-
-        Even with a large non-zero trim_end value, if needs_trim is False,
-        the response should show trimmed: false and no FFmpeg re-encoding.
-        """
+    def test_no_trim_when_no_segments(self, output_dir, app_client):
+        """Empty segments list should not trigger re-encode (full clip copy)."""
         stem = "notrimvid"
         clip = create_pending_clip(
             output_dir, stem, "clip_001.mp4",
             source_video="/fake/notrimvid.mp4",
-            start=0.0, end=20.0,  # 20s clip to allow trim_end=15.0
+            start=0.0, end=20.0,
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/notrimvid.mp4")
 
         resp = app_client.post(
             f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={
-                "trim_start": 0.0,
-                "trim_end": 15.0,  # Large non-zero value
-                "needs_trim": False,  # But needs_trim is explicitly False
-            },
+            json={"segments": []},
         )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "kept"
-        assert data["trimmed"] is False  # Should NOT trigger re-encode
+        assert data["trimmed"] is False  # Full clip copy, no re-encode
 
         # Verify kept file exists
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
