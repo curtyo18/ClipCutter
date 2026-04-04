@@ -6,6 +6,7 @@ from typing import Optional
 import click
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from clipcutter.config import DIR_CLIPS, DIR_METADATA, DIR_PENDING
 from clipcutter.metadata import load_metadata
@@ -65,8 +66,16 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
     app.include_router(compile.create_router(state))
     app.include_router(youtube.create_router(state))
 
+    dist_dir = STATIC_DIR / "dist"
+    if dist_dir.exists():
+        app.mount("/assets", StaticFiles(directory=dist_dir / "assets"), name="assets")
+
     @app.get("/", response_class=HTMLResponse)
     def index():
+        dist_path = STATIC_DIR / "dist" / "index.html"
+        if dist_path.exists():
+            return dist_path.read_text(encoding="utf-8")
+        # Fallback for dev: serve old index.html if dist not built yet
         return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
     return app
