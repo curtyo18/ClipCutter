@@ -183,6 +183,48 @@ def create_router(state: AppState) -> APIRouter:
         meta_path.unlink()
         return {"status": "deleted"}
 
+    @router.delete("/api/compilation/{compilation_id}/sources")
+    def delete_compilation_sources(compilation_id: str):
+        """Delete the individual clip files used to build a compilation."""
+        meta_path = state.output_dir / DIR_METADATA / f"{compilation_id}.json"
+        if not meta_path.exists():
+            raise HTTPException(404, "Compilation not found")
+
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+        clips = data.get("clips", [])
+        deleted = []
+
+        for clip_ref in clips:
+            video_stem = clip_ref.get("video_stem", "")
+            filename = clip_ref.get("filename", "")
+
+            # Delete kept file
+            kept_path = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem / filename
+            if kept_path.exists():
+                try:
+                    kept_path.unlink()
+                    deleted.append(filename)
+                except OSError:
+                    pass
+
+            # Delete encoded file via metadata
+            clip_meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+            if clip_meta_path.exists():
+                for cm in load_metadata(clip_meta_path):
+                    if cm.filename == filename:
+                        if cm.encoded_filename:
+                            enc_path = state.output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / cm.encoded_filename
+                            if enc_path.exists():
+                                try:
+                                    enc_path.unlink()
+                                except OSError:
+                                    pass
+                        from clipcutter.metadata import update_clip_status
+                        update_clip_status(clip_meta_path, filename, "deleted")
+                        break
+
+        return {"status": "deleted", "deleted_count": len(deleted), "deleted": deleted}
+
     @router.get("/video/compilation/{filename}")
     def serve_compilation(filename: str):
         clip_path = state.output_dir / DIR_CLIPS / DIR_COMPILATIONS / filename
