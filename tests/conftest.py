@@ -142,6 +142,46 @@ def create_pending_clip(output_dir: Path, video_stem: str, filename: str,
     )
 
 
+def create_pending_clip_long(output_dir: Path, video_stem: str, filename: str,
+                             source_video: str, file_duration_s: float = 3.0,
+                             start: float = 0.0, end: float = 10.0,
+                             confidence: float = 0.8) -> ClipMetadata:
+    """Create a pending clip whose actual video file is file_duration_s long.
+
+    Use this when a test needs to actually trim the clip (segments shorter than
+    the full file duration), since _make_tiny_mp4 only creates 1-second files.
+    """
+    reasons = ["volume_spike"]
+    clip_dir = output_dir / "clips" / "pending" / video_stem
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    clip_path = clip_dir / filename
+
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono",
+            "-f", "lavfi", "-i",
+            f"color=c=black:s=160x120:d={file_duration_s}:r=10",
+            "-c:v", "libx264", "-preset", "ultrafast",
+            "-c:a", "aac", "-b:a", "32k",
+            "-t", str(file_duration_s),
+            str(clip_path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+
+    return ClipMetadata(
+        filename=filename,
+        source_video=source_video,
+        start_time=start,
+        end_time=end,
+        duration=end - start,
+        detection_reasons=reasons,
+        confidence=confidence,
+        status="pending",
+    )
+
+
 def save_test_metadata(output_dir: Path, video_stem: str,
                        clips: list, source_video: str):
     """Write a metadata JSON matching what pipeline.py produces."""

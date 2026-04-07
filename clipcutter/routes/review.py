@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from clipcutter.config import DIR_CLIPS, DIR_ENCODED, DIR_KEPT, DIR_METADATA, DIR_PENDING
-from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_custom_name, update_clip_status
+from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_custom_name, update_clip_duration, update_clip_status
 from clipcutter.routes._helpers import _media_type
 from clipcutter.state import AppState
 
@@ -257,6 +257,10 @@ def create_router(state: AppState) -> APIRouter:
             trimmed = True
 
         update_clip_status(meta_path, filename, "kept")
+
+        if trimmed:
+            new_duration = sum(seg.end - seg.start for seg in segments)
+            update_clip_duration(meta_path, filename, new_duration)
 
         if req and req.custom_name and req.custom_name.strip():
             update_clip_custom_name(meta_path, filename, req.custom_name.strip())

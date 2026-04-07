@@ -1,9 +1,10 @@
 """Tests for the Review API: keep/discard, custom names, trim (Scenarios 1, 4, 5)."""
 
 import json
+import pytest
 from pathlib import Path
 
-from tests.conftest import create_pending_clip, save_test_metadata
+from tests.conftest import create_pending_clip, create_pending_clip_long, save_test_metadata
 
 
 class TestKeepClip:
@@ -177,6 +178,46 @@ class TestTrimAndCustomName:
         # Verify kept file exists
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
         assert kept_path.exists()
+
+    def test_trim_updates_duration_in_metadata(self, output_dir, app_client):
+        """When a clip is trimmed on keep, metadata duration reflects the trimmed length."""
+        stem = "trimdur"
+        clip = create_pending_clip_long(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/trimdur.mp4",
+            file_duration_s=3.0, start=0.0, end=10.0,
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/trimdur.mp4")
+
+        resp = app_client.post(
+            f"/api/clips/{stem}/clip_001.mp4/keep",
+            json={"segments": [{"start": 0.0, "end": 1.5}], "custom_name": None},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["trimmed"] is True
+
+        meta = _load_meta(output_dir, stem)
+        assert meta["clips"][0]["duration"] == pytest.approx(1.5, abs=0.01)
+
+    def test_full_clip_copy_does_not_change_duration(self, output_dir, app_client):
+        """Keeping without trim should leave the metadata duration unchanged."""
+        stem = "nodurchange"
+        clip = create_pending_clip(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/nodurchange.mp4",
+            start=0.0, end=10.0,
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/nodurchange.mp4")
+
+        resp = app_client.post(
+            f"/api/clips/{stem}/clip_001.mp4/keep",
+            json={"segments": [], "custom_name": None},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["trimmed"] is False
+
+        meta = _load_meta(output_dir, stem)
+        assert meta["clips"][0]["duration"] == 10.0  # unchanged
 
 
 # ---------------------------------------------------------------------------
