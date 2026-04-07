@@ -216,3 +216,54 @@ class TestKeptClipsResponse:
         assert len(test_clips) == 2
         assert test_clips[0]["video_stem"] == newer_stem
         assert test_clips[1]["video_stem"] == older_stem
+
+
+class TestDeleteKeptClip:
+    """DELETE /api/kept/{video_stem}/{filename} removes file and marks discarded."""
+
+    def test_delete_removes_file(self, output_dir, app_client):
+        stem = "delvid"
+        clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
+                                   source_video="/fake/delvid.mp4")
+        save_test_metadata(output_dir, stem, [clip], "/fake/delvid.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
+                        json={"segments": []})
+
+        kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
+        assert kept_path.exists()
+
+        resp = app_client.delete(f"/api/kept/{stem}/clip_001.mp4")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "deleted"
+        assert not kept_path.exists()
+
+    def test_delete_marks_metadata_discarded(self, output_dir, app_client):
+        stem = "delmetavid"
+        clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
+                                   source_video="/fake/delmetavid.mp4")
+        save_test_metadata(output_dir, stem, [clip], "/fake/delmetavid.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
+                        json={"segments": []})
+
+        app_client.delete(f"/api/kept/{stem}/clip_001.mp4")
+
+        meta = _load_meta(output_dir, stem)
+        assert meta["clips"][0]["status"] == "discarded"
+
+    def test_delete_nonexistent_returns_404(self, output_dir, app_client):
+        resp = app_client.delete("/api/kept/fakevid/nonexistent.mp4")
+        assert resp.status_code == 404
+
+    def test_deleted_clip_absent_from_kept_list(self, output_dir, app_client):
+        stem = "delvid2"
+        clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
+                                   source_video="/fake/delvid2.mp4")
+        save_test_metadata(output_dir, stem, [clip], "/fake/delvid2.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
+                        json={"segments": []})
+        app_client.delete(f"/api/kept/{stem}/clip_001.mp4")
+
+        resp = app_client.get("/api/kept")
+        kept_for_stem = [c for c in resp.json()["clips"]
+                         if c["video_stem"] == stem]
+        assert len(kept_for_stem) == 0

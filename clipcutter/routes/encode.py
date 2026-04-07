@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from clipcutter.config import DIR_CLIPS, DIR_ENCODED, DIR_KEPT, DIR_METADATA
-from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_encoding
+from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_encoding, update_clip_status
 from clipcutter.routes._helpers import _media_type, _sanitize_filename
 from clipcutter.state import AppState
 
@@ -189,5 +189,21 @@ def create_router(state: AppState) -> APIRouter:
         if not clip_path.exists():
             raise HTTPException(404, "Encoded clip not found")
         return FileResponse(clip_path, media_type=_media_type(filename))
+
+    @router.delete("/api/kept/{video_stem}/{filename}")
+    def delete_kept_clip(video_stem: str, filename: str):
+        """Delete a kept clip file and mark it as discarded in metadata."""
+        kept_path = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem / filename
+        meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+
+        if not kept_path.exists():
+            raise HTTPException(404, "Clip not found")
+
+        kept_path.unlink()
+
+        if meta_path.exists():
+            update_clip_status(meta_path, filename, "discarded")
+
+        return {"status": "deleted"}
 
     return router
