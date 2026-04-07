@@ -53,6 +53,10 @@ CLIP_MERGE_GAP_SECONDS = 10.0
 # Fallback
 FALLBACK_DURATION_SECONDS = 300.0  # 5 minutes
 
+# End-of-recording clip
+END_CLIP_DURATION_SECONDS = 60.0      # Always clip this many seconds from the end
+END_CLIP_TAIL_TOLERANCE_SECONDS = 5.0  # If a clip ends within this many seconds of video end, skip
+
 # Quality filter
 MIN_CONFIDENCE_THRESHOLD = 0.25
 MAX_CLIPS_PER_VIDEO = 20

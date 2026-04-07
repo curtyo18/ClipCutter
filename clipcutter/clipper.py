@@ -142,6 +142,32 @@ def compute_fallback_clip(video_duration: float) -> List[ClipBoundary]:
     )]
 
 
+def ensure_end_clip(boundaries: List[ClipBoundary],
+                    video_duration: float) -> List[ClipBoundary]:
+    """Add a last-N-seconds clip if no existing boundary reaches the end of the video.
+
+    Only adds if every existing boundary ends more than END_CLIP_TAIL_TOLERANCE_SECONDS
+    before the video end.
+    """
+    for b in boundaries:
+        if b.end_time >= video_duration - config.END_CLIP_TAIL_TOLERANCE_SECONDS:
+            return boundaries
+
+    clip_len = min(config.END_CLIP_DURATION_SECONDS, video_duration)
+    start = max(0.0, video_duration - clip_len)
+    return boundaries + [ClipBoundary(
+        start_time=start,
+        end_time=video_duration,
+        highlights=[Highlight(
+            timestamp=start,
+            duration=clip_len,
+            detection_type=DetectionType.FALLBACK,
+            raw_score=0.0,
+            confidence=0.1,
+        )],
+    )]
+
+
 def trim_silence(boundary: ClipBoundary, features: AudioFeatures) -> ClipBoundary:
     """Trim leading/trailing silence from a clip boundary."""
     rms = features.rms
