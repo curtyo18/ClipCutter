@@ -13,6 +13,7 @@ from clipcutter.metadata import (
     load_metadata_dict,
     save_metadata,
     update_clip_custom_name,
+    update_clip_duration,
     update_clip_encoding,
     update_clip_status,
 )
@@ -158,3 +159,62 @@ class TestOptionalFieldsOmitted:
             assert optional_key not in clip_dict, (
                 f"Optional field '{optional_key}' should not be serialized when None"
             )
+
+
+class TestDurationUpdate:
+    """update_clip_duration persists the new duration correctly."""
+
+    def test_update_duration(self, meta_dir):
+        clips = [
+            ClipMetadata(
+                filename="clip_001.mp4",
+                source_video="/videos/test.mp4",
+                start_time=0.0, end_time=30.0, duration=30.0,
+                detection_reasons=["volume_spike"], confidence=0.8,
+            ),
+        ]
+        meta_path = save_metadata(clips, "/videos/test.mp4", meta_dir)
+
+        update_clip_duration(meta_path, "clip_001.mp4", 20.0)
+
+        loaded = load_metadata(meta_path)
+        assert loaded[0].duration == 20.0
+
+    def test_update_duration_in_raw_json(self, meta_dir):
+        clips = [
+            ClipMetadata(
+                filename="clip_001.mp4",
+                source_video="/videos/test.mp4",
+                start_time=0.0, end_time=30.0, duration=30.0,
+                detection_reasons=["volume_spike"], confidence=0.8,
+            ),
+        ]
+        meta_path = save_metadata(clips, "/videos/test.mp4", meta_dir)
+
+        update_clip_duration(meta_path, "clip_001.mp4", 15.5)
+
+        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+        assert raw["clips"][0]["duration"] == 15.5
+
+    def test_update_duration_only_changes_target_clip(self, meta_dir):
+        clips = [
+            ClipMetadata(
+                filename="clip_001.mp4",
+                source_video="/videos/test.mp4",
+                start_time=0.0, end_time=30.0, duration=30.0,
+                detection_reasons=["volume_spike"], confidence=0.8,
+            ),
+            ClipMetadata(
+                filename="clip_002.mp4",
+                source_video="/videos/test.mp4",
+                start_time=60.0, end_time=90.0, duration=30.0,
+                detection_reasons=["laughter"], confidence=0.7,
+            ),
+        ]
+        meta_path = save_metadata(clips, "/videos/test.mp4", meta_dir)
+
+        update_clip_duration(meta_path, "clip_001.mp4", 20.0)
+
+        loaded = load_metadata(meta_path)
+        assert loaded[0].duration == 20.0
+        assert loaded[1].duration == 30.0  # unchanged

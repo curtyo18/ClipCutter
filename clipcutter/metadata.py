@@ -105,3 +105,17 @@ def update_clip_youtube(metadata_path: Path, filename: str,
     tmp = metadata_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     tmp.replace(metadata_path)
+
+
+def update_clip_duration(metadata_path: Path, filename: str, duration: float) -> None:
+    """Update a single clip's duration in the metadata file."""
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    for clip in data["clips"]:
+        if clip["filename"] == filename:
+            clip["duration"] = round(duration, 4)
+            break
+
+    tmp = metadata_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(metadata_path)
