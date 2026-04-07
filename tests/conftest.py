@@ -183,14 +183,15 @@ def create_pending_clip_long(output_dir: Path, video_stem: str, filename: str,
 
 
 def save_test_metadata(output_dir: Path, video_stem: str,
-                       clips: list, source_video: str):
+                       clips: list, source_video: str,
+                       processed_at: str = "2026-01-01T00:00:00"):
     """Write a metadata JSON matching what pipeline.py produces."""
     meta_dir = output_dir / "metadata"
     meta_dir.mkdir(parents=True, exist_ok=True)
     meta_path = meta_dir / f"{video_stem}_clips.json"
     data = {
         "source_video": source_video,
-        "processed_at": "2026-01-01T00:00:00",
+        "processed_at": processed_at,
         "clip_count": len(clips),
         "clips": [c.to_dict() for c in clips],
     }

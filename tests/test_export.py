@@ -163,3 +163,56 @@ def _wait_encoding(client, timeout: float = 60.0):
 def _load_meta(output_dir: Path, video_stem: str) -> dict:
     meta_path = output_dir / "metadata" / f"{video_stem}_clips.json"
     return json.loads(meta_path.read_text(encoding="utf-8"))
+
+
+class TestKeptClipsResponse:
+    """clipped_at field present in /api/kept response, sorted by date descending."""
+
+    def test_clipped_at_included(self, output_dir, app_client):
+        stem = "catvid"
+        clip = create_pending_clip(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/catvid.mp4",
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/catvid.mp4",
+                           processed_at="2026-03-15T10:00:00")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
+                        json={"segments": []})
+
+        resp = app_client.get("/api/kept")
+        assert resp.status_code == 200
+        clips = resp.json()["clips"]
+        kept = next(c for c in clips if c["video_stem"] == stem)
+        assert "clipped_at" in kept
+        assert kept["clipped_at"] == "2026-03-15T10:00:00"
+
+    def test_kept_clips_sorted_by_date_descending(self, output_dir, app_client):
+        older_stem = "older_sort"
+        newer_stem = "newer_sort"
+
+        older_clip = create_pending_clip(
+            output_dir, older_stem, "clip_001.mp4",
+            source_video="/fake/older.mp4",
+        )
+        save_test_metadata(output_dir, older_stem, [older_clip], "/fake/older.mp4",
+                           processed_at="2025-01-01T00:00:00")
+
+        newer_clip = create_pending_clip(
+            output_dir, newer_stem, "clip_001.mp4",
+            source_video="/fake/newer.mp4",
+        )
+        save_test_metadata(output_dir, newer_stem, [newer_clip], "/fake/newer.mp4",
+                           processed_at="2026-06-01T00:00:00")
+
+        app_client.post(f"/api/clips/{older_stem}/clip_001.mp4/keep",
+                        json={"segments": []})
+        app_client.post(f"/api/clips/{newer_stem}/clip_001.mp4/keep",
+                        json={"segments": []})
+
+        resp = app_client.get("/api/kept")
+        clips = resp.json()["clips"]
+        test_clips = [c for c in clips
+                      if c["video_stem"] in (older_stem, newer_stem)]
+        assert len(test_clips) == 2
+        assert test_clips[0]["video_stem"] == newer_stem
+        assert test_clips[1]["video_stem"] == older_stem

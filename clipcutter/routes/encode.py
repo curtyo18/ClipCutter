@@ -67,6 +67,7 @@ def create_router(state: AppState) -> APIRouter:
 
             meta_data = load_metadata_dict(meta_path)
             source_video = meta_data.get("source_video", video_stem)
+            clipped_at = meta_data.get("processed_at", "")
             clip_metas = load_metadata(meta_path)
 
             for clip in clip_metas:
@@ -86,6 +87,7 @@ def create_router(state: AppState) -> APIRouter:
                     "detection_reasons": clip.detection_reasons,
                     "confidence": clip.confidence,
                     "video_url": f"/video/{video_stem}/{clip.filename}",
+                    "clipped_at": clipped_at,
                     "custom_name": clip.custom_name,
                     "encoded_filename": clip.encoded_filename,
                     "encoding_preset": clip.encoding_preset,
@@ -105,7 +107,7 @@ def create_router(state: AppState) -> APIRouter:
 
                 clips.append(clip_info)
 
-        clips.sort(key=lambda c: (-c["confidence"],))
+        clips.sort(key=lambda c: c.get("clipped_at", ""), reverse=True)
         return {"clips": clips, "total": len(clips)}
 
     @router.post("/api/encode")
