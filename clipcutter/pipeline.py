@@ -12,6 +12,7 @@ from clipcutter.audio import check_ffmpeg, extract_audio, get_video_duration, No
 from clipcutter.clipper import (
     compute_clip_boundaries,
     compute_fallback_clip,
+    ensure_end_clip,
     extract_clips,
     format_duration,
     trim_silence,
@@ -98,6 +99,9 @@ def process_video(video_path: Path, output_dir: Path,
             boundaries = compute_clip_boundaries(highlights, video_duration)
         else:
             boundaries = compute_fallback_clip(video_duration)
+
+        # Always include the last minute unless already covered
+        boundaries = ensure_end_clip(boundaries, video_duration)
 
         # Trim silence
         boundaries = [trim_silence(b, features) for b in boundaries]
