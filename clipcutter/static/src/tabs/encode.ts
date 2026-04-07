@@ -1,7 +1,7 @@
 import {
   fetchKeptClips, fetchPresets, startEncoding, fetchEncodeStatus, cancelEncoding,
   fetchYouTubeStatus, fetchYouTubePlaylists, startYouTubeAuth, revokeYouTubeAuth,
-  startUpload, fetchUploadStatus, cancelUpload, createPlaylist,
+  startUpload, fetchUploadStatus, cancelUpload, createPlaylist, deleteKeptClip,
 } from '../api';
 import type { KeptClipInfo, Playlist } from '../api';
 import { escapeHtml, fmtTime, formatClipTitle } from '../utils';
@@ -77,6 +77,7 @@ export function renderExportView(): void {
     for (let i = 0; i < keptClips.length; i++) {
       const clip = keptClips[i];
       const dur = clip.duration ? Math.round(clip.duration) + 's' : '';
+      const date = clip.clipped_at ? clip.clipped_at.slice(0, 10) : '';
       const tags = (clip.detection_reasons || []).map(r =>
         `<span class="tag tag-${r}">${r.replace('_', ' ')}</span>`
       ).join('');
@@ -86,8 +87,12 @@ export function renderExportView(): void {
       html += `<span class="clip-name" title="${escapeHtml(clip.filename)}">${escapeHtml(clip.custom_name || clip.filename)}</span>`;
       html += `<span class="clip-detail">${escapeHtml(clip.video_stem || '')}</span>`;
       html += `<span class="clip-detail">${dur}</span>`;
+      html += `<span class="clip-detail" style="color:#888">${date}</span>`;
       html += `<span class="tags" style="margin-bottom:0">${tags}</span>`;
       html += badge;
+      html += `<button class="btn-cancel" style="margin-left:auto;padding:2px 8px;font-size:12px" `
+            + `data-stem="${escapeHtml(clip.video_stem)}" data-filename="${escapeHtml(clip.filename)}" `
+            + `onclick="window._cc.deleteKeptClipHandler(this)">✕</button>`;
       html += `</div>`;
     }
     html += `</div>`;
@@ -405,4 +410,19 @@ async function createPlaylistHandler(): Promise<void> {
       plSelect.value = newPl.id;
     }
   } catch (e) { alert((e as Error).message); }
+}
+
+export async function deleteKeptClipHandler(btn: HTMLButtonElement): Promise<void> {
+  const stem = btn.dataset.stem!;
+  const filename = btn.dataset.filename!;
+  if (!confirm(`Delete "${filename}"?`)) return;
+  try {
+    await deleteKeptClip(stem, filename);
+    const row = btn.closest('.clip-row') as HTMLElement | null;
+    if (row) row.remove();
+    const idx = keptClips.findIndex(c => c.video_stem === stem && c.filename === filename);
+    if (idx >= 0) keptClips.splice(idx, 1);
+  } catch (e) {
+    alert((e as Error).message);
+  }
 }

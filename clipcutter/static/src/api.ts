@@ -37,6 +37,7 @@ export interface KeptClipInfo {
   youtube_video_id: string | null;
   youtube_url: string | null;
   youtube_upload_status: string | null;
+  clipped_at?: string;
 }
 
 export interface WaveformData {
@@ -248,3 +249,6 @@ export const fetchUploadStatus = () => apiGet<UploadStatus>('/api/youtube/upload
 export const cancelUpload = () => apiPost<{ status: string }>('/api/youtube/upload/cancel', {});
 export const createPlaylist = (title: string, privacy: string) =>
   apiPost<Playlist>('/api/youtube/playlists', { title, privacy });
+
+export const deleteKeptClip = (videoStem: string, filename: string) =>
+  apiDelete(`/api/kept/${encodeURIComponent(videoStem)}/${encodeURIComponent(filename)}`);
