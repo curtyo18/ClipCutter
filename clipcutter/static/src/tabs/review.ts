@@ -15,7 +15,39 @@ let segments: SegmentEntry[] = [];
 let activeSegmentIndex = 0;
 export let savedVolume = 0.5;
 
+let reviewListenerAttached = false;
+
+function attachReviewListener(): void {
+  if (reviewListenerAttached) return;
+  reviewListenerAttached = true;
+  const container = document.getElementById('reviewContent');
+  if (!container) return;
+  container.addEventListener('click', (e: MouseEvent) => {
+    const clicked = e.target as HTMLElement;
+    if (clicked.tagName === 'INPUT') return;
+    const target = clicked.closest('[data-action]') as HTMLElement | null;
+    if (!target) return;
+    const action = target.dataset.action!;
+    const seg = target.dataset.seg !== undefined ? parseInt(target.dataset.seg, 10) : 0;
+    const which = (target.dataset.which ?? 'in') as 'in' | 'out';
+    const stem = target.dataset.stem ?? '';
+
+    switch (action) {
+      case 'keep':           clipAction('keep'); break;
+      case 'skip':           clipAction('skip'); break;
+      case 'discard':        clipAction('discard'); break;
+      case 'add-segment':    addSegment(); break;
+      case 'remove-segment': removeSegment(seg); break;
+      case 'focus-segment':  focusSegment(seg); break;
+      case 'set-point':      setSegmentPoint(seg, which); break;
+      case 'seek-to':        seekToSegment(seg, which); break;
+      case 'delete-source':  deleteSourceHandler(stem, target as HTMLButtonElement); break;
+    }
+  });
+}
+
 export async function loadClips(): Promise<void> {
+  attachReviewListener();
   const data = await fetchClips();
   clips = data.clips;
   results = new Array(clips.length).fill(null);
@@ -50,16 +82,16 @@ function showClip(): void {
         <span class="trim-label">Seg 1</span>
         <span class="trim-label" style="margin-left:8px">In</span>
         <input type="text" class="trim-time seg-in" data-seg="0" value="0:00" />
-        <button class="trim-btn" onclick="window._cc.setSegmentPoint(0,'in')">Set</button>
-        <button class="trim-btn" onclick="window._cc.seekToSegment(0,'in')">Go</button>
+        <button class="trim-btn" data-action="set-point" data-seg="0" data-which="in">Set</button>
+        <button class="trim-btn" data-action="seek-to" data-seg="0" data-which="in">Go</button>
         <span class="trim-label" style="margin-left:8px">Out</span>
         <input type="text" class="trim-time seg-out" data-seg="0" value="${fmtTimePrecise(clip.duration)}" />
-        <button class="trim-btn" onclick="window._cc.setSegmentPoint(0,'out')">Set</button>
-        <button class="trim-btn" onclick="window._cc.seekToSegment(0,'out')">Go</button>
+        <button class="trim-btn" data-action="set-point" data-seg="0" data-which="out">Set</button>
+        <button class="trim-btn" data-action="seek-to" data-seg="0" data-which="out">Go</button>
       </div>
     </div>
     <div style="margin:6px 0">
-      <button class="trim-btn" onclick="window._cc.addSegment()">+ Add segment</button>
+      <button class="trim-btn" data-action="add-segment">+ Add segment</button>
       <span class="trim-indicator" id="trimIndicator"></span>
     </div>
   `;
@@ -104,9 +136,9 @@ function showClip(): void {
         <input type="text" class="clip-name-input" id="clipCustomName" placeholder="Optional custom name for export..." />
       </div>
       <div class="actions">
-        <button class="btn btn-keep" onclick="window._cc.clipAction('keep')">Keep <span class="shortcut">K</span></button>
-        <button class="btn btn-skip" onclick="window._cc.clipAction('skip')">Skip <span class="shortcut">S</span></button>
-        <button class="btn btn-discard" onclick="window._cc.clipAction('discard')">Discard <span class="shortcut">D</span></button>
+        <button class="btn btn-keep" data-action="keep">Keep <span class="shortcut">K</span></button>
+        <button class="btn btn-skip" data-action="skip">Skip <span class="shortcut">S</span></button>
+        <button class="btn btn-discard" data-action="discard">Discard <span class="shortcut">D</span></button>
       </div>
     </div>
     <div class="keyboard-hint">
@@ -158,18 +190,18 @@ function renderSegments(clipDuration: number): void {
   let html = '';
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    html += `<div class="segment-row" data-seg="${i}" onclick="window._cc.focusSegment(${i})" style="cursor:pointer;${i === activeSegmentIndex ? 'outline:1px solid #60a5fa;' : ''}">`;
+    html += `<div class="segment-row" data-seg="${i}" data-action="focus-segment" style="cursor:pointer;${i === activeSegmentIndex ? 'outline:1px solid #60a5fa;' : ''}">`;
     html += `<span class="trim-label">Seg ${i + 1}</span>`;
     html += `<span class="trim-label" style="margin-left:8px">In</span>`;
     html += `<input type="text" class="trim-time seg-in" data-seg="${i}" value="${fmtTimePrecise(seg.start)}" oninput="window._cc.onSegmentInput(${i},'in',this.value)" />`;
-    html += `<button class="trim-btn" onclick="window._cc.setSegmentPoint(${i},'in')">Set</button>`;
-    html += `<button class="trim-btn" onclick="window._cc.seekToSegment(${i},'in')">Go</button>`;
+    html += `<button class="trim-btn" data-action="set-point" data-seg="${i}" data-which="in">Set</button>`;
+    html += `<button class="trim-btn" data-action="seek-to" data-seg="${i}" data-which="in">Go</button>`;
     html += `<span class="trim-label" style="margin-left:8px">Out</span>`;
     html += `<input type="text" class="trim-time seg-out" data-seg="${i}" value="${fmtTimePrecise(seg.end)}" oninput="window._cc.onSegmentInput(${i},'out',this.value)" />`;
-    html += `<button class="trim-btn" onclick="window._cc.setSegmentPoint(${i},'out')">Set</button>`;
-    html += `<button class="trim-btn" onclick="window._cc.seekToSegment(${i},'out')">Go</button>`;
+    html += `<button class="trim-btn" data-action="set-point" data-seg="${i}" data-which="out">Set</button>`;
+    html += `<button class="trim-btn" data-action="seek-to" data-seg="${i}" data-which="out">Go</button>`;
     if (segments.length > 1) {
-      html += `<button class="comp-remove" onclick="window._cc.removeSegment(${i})">&times;</button>`;
+      html += `<button class="comp-remove" data-action="remove-segment" data-seg="${i}">&times;</button>`;
     }
     html += `</div>`;
   }
@@ -308,7 +340,7 @@ async function showDone(): Promise<void> {
               <div class="source-detail">${src.kept} kept, ${src.discarded} discarded</div>
             </div>
             <div class="source-size">${src.size_mb} MB</div>
-            <button class="btn-delete" onclick="window._cc.deleteSourceHandler('${src.video_stem}', this)">Delete</button>
+            <button class="btn-delete" data-action="delete-source" data-stem="${src.video_stem}">Delete</button>
           </div>`;
       }
       html += `<div class="cleanup-total">Total reclaimable: ${totalMb.toFixed(1)} MB</div></div>`;
