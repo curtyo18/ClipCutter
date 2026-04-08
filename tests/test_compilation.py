@@ -169,3 +169,73 @@ class TestCompilationDelete:
     def test_delete_nonexistent_compilation(self, output_dir, app_client):
         resp = app_client.delete("/api/compilation/comp_nonexistent")
         assert resp.status_code == 404
+
+
+class TestCompilationSources:
+    """DELETE /api/compilation/{id}/sources removes the source clip files."""
+
+    def _write_compilation_meta(self, output_dir: Path, comp_id: str, clips: list) -> None:
+        """Write a minimal compilation metadata JSON without running FFmpeg."""
+        meta_dir = output_dir / "metadata"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        data = {
+            "compilation_id": comp_id,
+            "filename": f"{comp_id}.mp4",
+            "created_at": "2026-01-01T00:00:00",
+            "clips": clips,
+            "transition": "cut",
+            "total_duration": 2.0,
+            "status": "complete",
+        }
+        (meta_dir / f"{comp_id}.json").write_text(
+            json.dumps(data), encoding="utf-8"
+        )
+
+    def test_delete_sources_removes_kept_files(self, output_dir, app_client):
+        stem = "delsrc"
+        clips_data = []
+        for i in range(1, 3):
+            fname = f"clip_{i:03d}.mp4"
+            clip = create_pending_clip(
+                output_dir, stem, fname,
+                source_video=f"/fake/{stem}.mp4",
+            )
+            clips_data.append(clip)
+        save_test_metadata(output_dir, stem, clips_data, f"/fake/{stem}.mp4")
+
+        for clip in clips_data:
+            app_client.post(
+                f"/api/clips/{stem}/{clip.filename}/keep",
+                json={"segments": []},
+            )
+
+        # Both kept files should exist before we call delete
+        for clip in clips_data:
+            assert (output_dir / "clips" / "kept" / stem / clip.filename).exists()
+
+        comp_id = "comp_srctest"
+        self._write_compilation_meta(output_dir, comp_id, [
+            {"video_stem": stem, "filename": clip.filename, "duration": 1.0}
+            for clip in clips_data
+        ])
+
+        resp = app_client.delete(f"/api/compilation/{comp_id}/sources")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["deleted_count"] == 2
+        assert set(data["deleted"]) == {"clip_001.mp4", "clip_002.mp4"}
+
+        # Kept files should be gone
+        for clip in clips_data:
+            assert not (output_dir / "clips" / "kept" / stem / clip.filename).exists()
+
+        # Metadata should mark clips as deleted
+        meta = json.loads(
+            (output_dir / "metadata" / f"{stem}_clips.json").read_text(encoding="utf-8")
+        )
+        for c in meta["clips"]:
+            assert c["status"] == "deleted", f"Expected deleted, got {c['status']}"
+
+    def test_delete_sources_404_for_missing_compilation(self, output_dir, app_client):
+        resp = app_client.delete("/api/compilation/comp_doesnotexist/sources")
+        assert resp.status_code == 404
