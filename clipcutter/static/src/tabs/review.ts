@@ -19,9 +19,9 @@ let reviewListenerAttached = false;
 
 function attachReviewListener(): void {
   if (reviewListenerAttached) return;
-  reviewListenerAttached = true;
   const container = document.getElementById('reviewContent');
   if (!container) return;
+  reviewListenerAttached = true;
   container.addEventListener('click', (e: MouseEvent) => {
     const clicked = e.target as HTMLElement;
     if (clicked.tagName === 'INPUT') return;
