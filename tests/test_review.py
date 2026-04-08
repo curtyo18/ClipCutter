@@ -220,6 +220,44 @@ class TestTrimAndCustomName:
         assert meta["clips"][0]["duration"] == 10.0  # unchanged
 
 
+class TestMultiSegmentKeep:
+    """Keep with 2+ segments uses FFmpeg concat filter and reports combined duration."""
+
+    def test_keep_with_multiple_segments(self, output_dir, app_client):
+        stem = "multiseg"
+        # 4-second clip so two 1.5s segments fit with a gap between them
+        clip = create_pending_clip_long(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/multiseg.mp4",
+            file_duration_s=4.0,
+            start=0.0, end=10.0,
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/multiseg.mp4")
+
+        resp = app_client.post(
+            f"/api/clips/{stem}/clip_001.mp4/keep",
+            json={
+                "segments": [
+                    {"start": 0.0, "end": 1.5},
+                    {"start": 2.5, "end": 4.0},
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "kept"
+        assert data["trimmed"] is True
+
+        # File must exist (FFmpeg concat ran successfully)
+        kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
+        assert kept_path.exists()
+
+        # Metadata duration should reflect combined segment length: 1.5 + 1.5 = 3.0s
+        meta = _load_meta(output_dir, stem)
+        assert meta["clips"][0]["duration"] == pytest.approx(3.0, abs=0.1)
+        assert meta["clips"][0]["status"] == "kept"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
