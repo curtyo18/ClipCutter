@@ -174,7 +174,8 @@ class TestCompilationDelete:
 class TestCompilationSources:
     """DELETE /api/compilation/{id}/sources removes the source clip files."""
 
-    def _write_compilation_meta(self, output_dir: Path, comp_id: str, clips: list) -> None:
+    @staticmethod
+    def _write_compilation_meta(output_dir: Path, comp_id: str, clips: list) -> None:
         """Write a minimal compilation metadata JSON without running FFmpeg."""
         meta_dir = output_dir / "metadata"
         meta_dir.mkdir(parents=True, exist_ok=True)
@@ -204,10 +205,7 @@ class TestCompilationSources:
         save_test_metadata(output_dir, stem, clips_data, f"/fake/{stem}.mp4")
 
         for clip in clips_data:
-            app_client.post(
-                f"/api/clips/{stem}/{clip.filename}/keep",
-                json={"segments": []},
-            )
+            _keep_clip(app_client, stem, clip.filename)
 
         # Both kept files should exist before we call delete
         for clip in clips_data:
