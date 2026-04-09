@@ -103,12 +103,13 @@ function renderStaleCandidates(result: FolderScanResult, thresholdDays: number):
   const rows = stale.map(v => {
     const category = v.status === 'unprocessed' ? 'unprocessed' : 'processed, kept';
     const rowClass = v.status === 'unprocessed' ? 'scan-stale-unprocessed' : 'scan-stale-processed';
+    const safeAttr = v.filename.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return `<tr>
       <td class="filename ${rowClass}">${escapeHtml(v.filename)}</td>
       <td>${formatSize(v.size_mb)}</td>
       <td style="color:#f87171">${v.age_days}d</td>
       <td style="color:#64748b">${category}</td>
-      <td><button class="btn-delete-file" data-filename="${escapeHtml(v.filename)}" onclick="window._cc.deleteFileHandler(this)">Delete</button></td>
+      <td><button class="btn-delete-file" data-filename="${safeAttr}" onclick="window._cc.deleteFileHandler(this)">Delete</button></td>
     </tr>`;
   }).join('');
 
@@ -143,7 +144,8 @@ export async function deleteFileHandler(btn: HTMLButtonElement): Promise<void> {
   } catch (e) {
     btn.disabled = false;
     btn.textContent = 'Delete';
-    btn.insertAdjacentHTML('afterend', ` <span style="color:#f87171;font-size:11px">${escapeHtml((e as Error).message)}</span>`);
+    btn.parentElement?.querySelectorAll('.delete-error').forEach(el => el.remove());
+    btn.insertAdjacentHTML('afterend', ` <span class="delete-error" style="color:#f87171;font-size:11px">${escapeHtml((e as Error).message)}</span>`);
   }
 }
 
