@@ -19,6 +19,11 @@ class ProcessRequest(BaseModel):
     context: Optional[float] = None
 
 
+class FolderFileDeleteRequest(BaseModel):
+    folder: str
+    filename: str
+
+
 def create_router(state: AppState, launch_cwd: str) -> APIRouter:
     router = APIRouter()
 
@@ -102,6 +107,30 @@ def create_router(state: AppState, launch_cwd: str) -> APIRouter:
 
         total_size_mb = round(sum(v["size_mb"] for v in videos), 1)
         return {"videos": videos, "total_size_mb": total_size_mb}
+
+    @router.post("/api/folder-scan/file/delete")
+    def delete_folder_file(req: FolderFileDeleteRequest):
+        folder_path = Path(req.folder).resolve()
+        file_path = (folder_path / req.filename).resolve()
+
+        # Path traversal guard
+        try:
+            file_path.relative_to(folder_path)
+        except ValueError:
+            raise HTTPException(400, "Invalid filename")
+
+        if not file_path.exists():
+            raise HTTPException(404, "File not found")
+
+        meta_path = state.output_dir / DIR_METADATA / f"{file_path.stem}_clips.json"
+        if meta_path.exists():
+            clips = load_metadata(meta_path)
+            if any(c.status == "pending" for c in clips):
+                raise HTTPException(400, "Cannot delete: some clips are still pending review")
+
+        size_mb = round(file_path.stat().st_size / (1024 * 1024), 1)
+        file_path.unlink()
+        return {"status": "deleted", "freed_mb": size_mb}
 
     @router.get("/api/sources")
     def list_reviewed_sources():

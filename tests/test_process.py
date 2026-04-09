@@ -184,3 +184,74 @@ class TestFolderScan:
         data = resp.json()
         assert len(data["videos"]) == 2
         assert data["total_size_mb"] == pytest.approx(3.0, abs=0.1)
+
+
+class TestFolderFileDelete:
+    """POST /api/folder-scan/file/delete — delete a source video file."""
+
+    def test_file_not_found_returns_404(self, output_dir, app_client, tmp_path):
+        resp = app_client.post("/api/folder-scan/file/delete", json={
+            "folder": str(tmp_path),
+            "filename": "nonexistent.mp4",
+        })
+        assert resp.status_code == 404
+
+    def test_path_traversal_returns_400(self, output_dir, app_client, tmp_path):
+        resp = app_client.post("/api/folder-scan/file/delete", json={
+            "folder": str(tmp_path),
+            "filename": "../outside.mp4",
+        })
+        assert resp.status_code == 400
+
+    def test_pending_clips_blocks_delete(self, output_dir, app_client, tmp_path):
+        from tests.conftest import save_test_metadata, create_pending_clip
+
+        video = tmp_path / "session_003.mp4"
+        video.write_bytes(b"\x00" * 512)
+
+        clip = create_pending_clip(output_dir, "session_003", "clip_001.mp4",
+                                   source_video=str(video))
+        save_test_metadata(output_dir, "session_003", [clip], str(video))
+
+        resp = app_client.post("/api/folder-scan/file/delete", json={
+            "folder": str(tmp_path),
+            "filename": "session_003.mp4",
+        })
+        assert resp.status_code == 400
+        assert video.exists()  # File was not deleted
+
+    def test_delete_unprocessed_video(self, output_dir, app_client, tmp_path):
+        video = tmp_path / "old_game.mp4"
+        video.write_bytes(b"\x00" * 1024 * 1024)  # 1 MB
+
+        resp = app_client.post("/api/folder-scan/file/delete", json={
+            "folder": str(tmp_path),
+            "filename": "old_game.mp4",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "deleted"
+        assert data["freed_mb"] == pytest.approx(1.0, abs=0.1)
+        assert not video.exists()
+
+    def test_delete_processed_video(self, output_dir, app_client, tmp_path):
+        from tests.conftest import save_test_metadata
+        from clipcutter.models import ClipMetadata
+
+        video = tmp_path / "session_done.mp4"
+        video.write_bytes(b"\x00" * 512)
+
+        clip = ClipMetadata(
+            filename="clip_001.mp4", source_video=str(video),
+            start_time=0.0, end_time=5.0, duration=5.0,
+            detection_reasons=["volume_spike"], confidence=0.8,
+            status="kept",
+        )
+        save_test_metadata(output_dir, "session_done", [clip], str(video))
+
+        resp = app_client.post("/api/folder-scan/file/delete", json={
+            "folder": str(tmp_path),
+            "filename": "session_done.mp4",
+        })
+        assert resp.status_code == 200
+        assert not video.exists()
