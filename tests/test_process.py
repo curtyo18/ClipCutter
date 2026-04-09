@@ -1,6 +1,5 @@
 """Tests for the clip detection pipeline (Scenario 1 partial + Scenario 5 setup)."""
 
-import os
 import shutil
 import time
 from pathlib import Path
@@ -119,7 +118,7 @@ class TestFolderScan:
 
     def test_unprocessed_video_has_unprocessed_status(self, output_dir, app_client, tmp_path):
         video = tmp_path / "clip_001.mp4"
-        video.write_bytes(b"\x00" * 1024)
+        video.write_bytes(b"\x00" * 100 * 1024)  # 100 KB so size_mb rounds to > 0.0
 
         resp = app_client.get(f"/api/folder-scan?folder={tmp_path}")
         assert resp.status_code == 200

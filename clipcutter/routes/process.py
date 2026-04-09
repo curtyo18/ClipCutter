@@ -80,7 +80,7 @@ def create_router(state: AppState, launch_cwd: str) -> APIRouter:
         for f in sorted(folder_path.iterdir()):
             if not f.is_file() or f.suffix.lower() not in VIDEO_EXTENSIONS:
                 continue
-            size_mb = round(f.stat().st_size / (1024 * 1024), 3)
+            size_mb = round(f.stat().st_size / (1024 * 1024), 1)
             age_days = (now - datetime.fromtimestamp(f.stat().st_mtime)).days
 
             meta_path = meta_dir / f"{f.stem}_clips.json"
