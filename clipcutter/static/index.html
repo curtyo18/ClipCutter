@@ -88,6 +88,93 @@
   .btn-process:hover { background: #1d4ed8; }
   .btn-process:disabled { background: #333; color: #666; cursor: not-allowed; }
 
+  .btn-scan {
+    padding: 10px 20px;
+    background: #1e293b;
+    color: #94a3b8;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+  .btn-scan:hover { background: #273549; color: #e2e8f0; }
+  .btn-scan:disabled { background: #111; color: #444; cursor: not-allowed; }
+
+  .scan-panel {
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .scan-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .scan-panel-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #64748b;
+  }
+  .scan-panel-title.stale { color: #f87171; }
+  .scan-panel-meta { font-size: 12px; color: #475569; }
+  .scan-panel-error { font-size: 13px; color: #f87171; margin-bottom: 10px; }
+  .scan-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .scan-table th {
+    text-align: left;
+    color: #475569;
+    font-weight: 500;
+    padding: 3px 0;
+    border-bottom: 1px solid #1e293b;
+  }
+  .scan-table td { padding: 4px 0; color: #94a3b8; }
+  .scan-table td.filename { color: #e2e8f0; }
+  .scan-status-processed { color: #4ade80; }
+  .scan-status-pending { color: #facc15; }
+  .scan-status-unprocessed { color: #f87171; }
+  .scan-stale-unprocessed { color: #fca5a5; }
+  .scan-stale-processed { color: #fdba74; }
+  .btn-delete-file {
+    padding: 2px 10px;
+    background: #7f1d1d;
+    color: #fca5a5;
+    border: none;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn-delete-file:hover { background: #991b1b; }
+  .btn-delete-file:disabled { background: #2d1111; color: #6b3333; cursor: not-allowed; }
+  .stale-threshold-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #475569;
+  }
+  .stale-threshold-row input {
+    width: 52px;
+    padding: 3px 6px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    color: #e2e8f0;
+    font-size: 12px;
+    text-align: center;
+  }
+
   .log-box {
     background: #0a0a0a;
     border: 1px solid #222;
@@ -673,8 +760,13 @@
           <label>Context (s)</label>
           <input type="number" id="context" placeholder="20" min="0" step="1" />
         </div>
+        <button class="btn-scan" id="btnScan" onclick="window._cc.scanFolderHandler()">Scan</button>
         <button class="btn-process" id="btnProcess" onclick="window._cc.startProcessingHandler()">Process</button>
       </div>
+    </div>
+    <div id="folderScanPanel" style="display:none">
+      <div class="scan-panel" id="videosInFolderSection"></div>
+      <div class="scan-panel" id="staleCandidatesSection" style="border-color:#2d1111"></div>
     </div>
     <div class="log-box" id="logBox"></div>
   </div>
