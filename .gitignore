@@ -57,3 +57,4 @@ __pycache__
 # Vite frontend build artifacts
 clipcutter/static/node_modules/
 clipcutter/static/dist/
+.superpowers/
