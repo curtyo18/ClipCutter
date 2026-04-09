@@ -1,4 +1,4 @@
-import { initProcessTab, startProcessingHandler } from './tabs/process';
+import { initProcessTab, startProcessingHandler, scanFolderHandler, thresholdChangedHandler, deleteFileHandler } from './tabs/process';
 import { loadClips, clipAction, addSegment, removeSegment, focusSegment, setSegmentPoint, seekToSegment, onSegmentInput, updateTrimIndicator, stopWaveformSync, deleteSourceHandler } from './tabs/review';
 import { loadExportTab, renderExportView, toggleAllClips, startEncodingHandler, cancelEncodingHandler, startYouTubeAuthHandler, revokeYouTubeAuthHandler, startUploadHandler, cancelUploadHandler, keptClips, deleteKeptClipHandler } from './tabs/encode';
 import { addSelectedToCompilation, renderCompilationList, removeCompClip, updateCompDuration, startCompilationHandler, cancelCompilationHandler, loadPastCompilations, deleteCompilationHandler, deleteCompilationSourcesHandler } from './tabs/compile';
@@ -14,6 +14,9 @@ declare global {
 const handlers = {
   // Process
   startProcessingHandler,
+  scanFolderHandler,
+  thresholdChangedHandler,
+  deleteFileHandler,
   // Review
   clipAction,
   addSegment,
