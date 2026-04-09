@@ -92,11 +92,16 @@ def create_router(state: AppState, launch_cwd: str) -> APIRouter:
             if not meta_path.exists():
                 status = "unprocessed"
             else:
-                clips = load_metadata(meta_path)
-                if any(c.status == "pending" for c in clips):
-                    status = "pending_review"
+                meta_dict = load_metadata_dict(meta_path)
+                stored_source = Path(meta_dict.get("source_video", "")).resolve()
+                if stored_source != f.resolve():
+                    status = "unprocessed"
                 else:
-                    status = "processed"
+                    clips = load_metadata(meta_path)
+                    if any(c.status == "pending" for c in clips):
+                        status = "pending_review"
+                    else:
+                        status = "processed"
 
             videos.append({
                 "filename": f.name,
@@ -124,9 +129,12 @@ def create_router(state: AppState, launch_cwd: str) -> APIRouter:
 
         meta_path = state.output_dir / DIR_METADATA / f"{file_path.stem}_clips.json"
         if meta_path.exists():
-            clips = load_metadata(meta_path)
-            if any(c.status == "pending" for c in clips):
-                raise HTTPException(400, "Cannot delete: some clips are still pending review")
+            meta_dict = load_metadata_dict(meta_path)
+            stored_source = Path(meta_dict.get("source_video", "")).resolve()
+            if stored_source == file_path:
+                clips = load_metadata(meta_path)
+                if any(c.status == "pending" for c in clips):
+                    raise HTTPException(400, "Cannot delete: some clips are still pending review")
 
         size_mb = round(file_path.stat().st_size / (1024 * 1024), 1)
         file_path.unlink()

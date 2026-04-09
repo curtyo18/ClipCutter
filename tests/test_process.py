@@ -185,6 +185,29 @@ class TestFolderScan:
         assert len(data["videos"]) == 2
         assert data["total_size_mb"] == pytest.approx(3.0, abs=0.1)
 
+    def test_same_stem_different_folder_treated_as_unprocessed(self, output_dir, app_client, tmp_path):
+        """Metadata for a same-named file from a different folder should not affect status."""
+        from tests.conftest import save_test_metadata
+        from clipcutter.models import ClipMetadata
+
+        video = tmp_path / "game.mp4"
+        video.write_bytes(b"\x00" * 512)
+
+        # Metadata points to a different folder's game.mp4
+        other_path = "/other/folder/game.mp4"
+        clip = ClipMetadata(
+            filename="clip_001.mp4", source_video=other_path,
+            start_time=0.0, end_time=5.0, duration=5.0,
+            detection_reasons=["volume_spike"], confidence=0.8,
+            status="kept",
+        )
+        save_test_metadata(output_dir, "game", [clip], other_path)
+
+        resp = app_client.get(f"/api/folder-scan?folder={tmp_path}")
+        data = resp.json()
+        assert len(data["videos"]) == 1
+        assert data["videos"][0]["status"] == "unprocessed"
+
 
 class TestFolderFileDelete:
     """POST /api/folder-scan/file/delete — delete a source video file."""
