@@ -1,5 +1,6 @@
 """Tests for the clip detection pipeline (Scenario 1 partial + Scenario 5 setup)."""
 
+import os
 import shutil
 import time
 from pathlib import Path
@@ -100,3 +101,87 @@ def _wait_processing(client, timeout: float = 120.0):
             return
         time.sleep(0.5)
     pytest.fail("Processing timed out")
+
+
+class TestFolderScan:
+    """GET /api/folder-scan — scan a folder for video files."""
+
+    def test_folder_not_found_returns_400(self, output_dir, app_client):
+        resp = app_client.get("/api/folder-scan?folder=/nonexistent/path/xyz")
+        assert resp.status_code == 400
+
+    def test_empty_folder_returns_empty_list(self, output_dir, app_client, tmp_path):
+        resp = app_client.get(f"/api/folder-scan?folder={tmp_path}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["videos"] == []
+        assert data["total_size_mb"] == 0.0
+
+    def test_unprocessed_video_has_unprocessed_status(self, output_dir, app_client, tmp_path):
+        video = tmp_path / "clip_001.mp4"
+        video.write_bytes(b"\x00" * 1024)
+
+        resp = app_client.get(f"/api/folder-scan?folder={tmp_path}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["videos"]) == 1
+        v = data["videos"][0]
+        assert v["filename"] == "clip_001.mp4"
+        assert v["status"] == "unprocessed"
+        assert v["size_mb"] > 0
+        assert v["age_days"] >= 0
+
+    def test_non_video_files_excluded(self, output_dir, app_client, tmp_path):
+        (tmp_path / "notes.txt").write_text("hello")
+        (tmp_path / "thumb.jpg").write_bytes(b"\xff")
+        (tmp_path / "game.mp4").write_bytes(b"\x00" * 512)
+
+        resp = app_client.get(f"/api/folder-scan?folder={tmp_path}")
+        data = resp.json()
+        assert len(data["videos"]) == 1
+        assert data["videos"][0]["filename"] == "game.mp4"
+
+    def test_processed_video_has_processed_status(self, output_dir, app_client, tmp_path):
+        from tests.conftest import save_test_metadata
+        from clipcutter.models import ClipMetadata
+
+        video = tmp_path / "session_001.mp4"
+        video.write_bytes(b"\x00" * 512)
+
+        clip = ClipMetadata(
+            filename="clip_001.mp4",
+            source_video=str(video),
+            start_time=0.0, end_time=5.0, duration=5.0,
+            detection_reasons=["volume_spike"], confidence=0.8,
+            status="kept",
+        )
+        save_test_metadata(output_dir, "session_001", [clip], str(video))
+
+        resp = app_client.get(f"/api/folder-scan?folder={tmp_path}")
+        data = resp.json()
+        assert len(data["videos"]) == 1
+        assert data["videos"][0]["status"] == "processed"
+
+    def test_pending_review_video_has_pending_review_status(self, output_dir, app_client, tmp_path):
+        from tests.conftest import save_test_metadata, create_pending_clip
+
+        video = tmp_path / "session_002.mp4"
+        video.write_bytes(b"\x00" * 512)
+
+        clip = create_pending_clip(output_dir, "session_002", "clip_001.mp4",
+                                   source_video=str(video))
+        save_test_metadata(output_dir, "session_002", [clip], str(video))
+
+        resp = app_client.get(f"/api/folder-scan?folder={tmp_path}")
+        data = resp.json()
+        assert len(data["videos"]) == 1
+        assert data["videos"][0]["status"] == "pending_review"
+
+    def test_total_size_sums_all_videos(self, output_dir, app_client, tmp_path):
+        (tmp_path / "a.mp4").write_bytes(b"\x00" * 1024 * 1024)
+        (tmp_path / "b.mkv").write_bytes(b"\x00" * 2 * 1024 * 1024)
+
+        resp = app_client.get(f"/api/folder-scan?folder={tmp_path}")
+        data = resp.json()
+        assert len(data["videos"]) == 2
+        assert data["total_size_mb"] == pytest.approx(3.0, abs=0.1)

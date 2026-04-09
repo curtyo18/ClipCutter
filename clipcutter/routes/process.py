@@ -1,6 +1,7 @@
 """Process and source video management endpoints."""
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -63,6 +64,44 @@ def create_router(state: AppState, launch_cwd: str) -> APIRouter:
     @router.get("/api/process/status")
     def processing_status():
         return state.proc.snapshot()
+
+    VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm'}
+
+    @router.get("/api/folder-scan")
+    def scan_folder(folder: str):
+        folder_path = Path(folder)
+        if not folder_path.exists() or not folder_path.is_dir():
+            raise HTTPException(400, f"Folder not found: {folder}")
+
+        meta_dir = state.output_dir / DIR_METADATA
+        videos = []
+        now = datetime.now()
+
+        for f in sorted(folder_path.iterdir()):
+            if not f.is_file() or f.suffix.lower() not in VIDEO_EXTENSIONS:
+                continue
+            size_mb = round(f.stat().st_size / (1024 * 1024), 3)
+            age_days = (now - datetime.fromtimestamp(f.stat().st_mtime)).days
+
+            meta_path = meta_dir / f"{f.stem}_clips.json"
+            if not meta_path.exists():
+                status = "unprocessed"
+            else:
+                clips = load_metadata(meta_path)
+                if any(c.status == "pending" for c in clips):
+                    status = "pending_review"
+                else:
+                    status = "processed"
+
+            videos.append({
+                "filename": f.name,
+                "size_mb": size_mb,
+                "age_days": age_days,
+                "status": status,
+            })
+
+        total_size_mb = round(sum(v["size_mb"] for v in videos), 1)
+        return {"videos": videos, "total_size_mb": total_size_mb}
 
     @router.get("/api/sources")
     def list_reviewed_sources():
