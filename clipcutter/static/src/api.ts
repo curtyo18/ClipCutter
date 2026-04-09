@@ -128,6 +128,18 @@ export interface SourceVideo {
   total: number;
 }
 
+export interface VideoEntry {
+  filename: string;
+  size_mb: number;
+  age_days: number;
+  status: 'processed' | 'pending_review' | 'unprocessed';
+}
+
+export interface FolderScanResult {
+  videos: VideoEntry[];
+  total_size_mb: number;
+}
+
 export interface YouTubeStatus {
   authenticated: boolean;
   channel_name?: string;
@@ -199,6 +211,10 @@ export const fetchDefaults = () => apiGet<{ folder: string }>('/api/defaults');
 export const startProcessing = (body: { folder: string; sensitivity: number; context: number | null }) =>
   apiPost<{ status: string }>('/api/process', body);
 export const fetchProcessStatus = () => apiGet<ProcessStatus>('/api/process/status');
+export const fetchFolderScan = (folder: string) =>
+  apiGet<FolderScanResult>(`/api/folder-scan?folder=${encodeURIComponent(folder)}`);
+export const deleteFolderFile = (folder: string, filename: string) =>
+  apiPost<{ status: string; freed_mb: number }>('/api/folder-scan/file/delete', { folder, filename });
 
 // ---- Review ----
 
