@@ -267,3 +267,30 @@ class TestDeleteKeptClip:
         kept_for_stem = [c for c in resp.json()["clips"]
                          if c["video_stem"] == stem]
         assert len(kept_for_stem) == 0
+
+
+import os
+from unittest.mock import patch
+
+
+class TestOpenFolder:
+    def test_open_folder_not_found_returns_404(self, output_dir, app_client):
+        resp = app_client.get("/api/open-folder/kept/no_such_stem")
+        assert resp.status_code == 404
+
+    def test_open_folder_calls_startfile(self, output_dir, app_client):
+        stem = "openfolder"
+        clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
+                                   source_video="/fake/openfolder.mp4")
+        save_test_metadata(output_dir, stem, [clip], "/fake/openfolder.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
+                        json={"segments": []})
+
+        with patch("os.startfile") as mock_startfile:
+            resp = app_client.get(f"/api/open-folder/kept/{stem}")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "opened"
+        mock_startfile.assert_called_once()
+        called_path = mock_startfile.call_args[0][0]
+        assert stem in called_path

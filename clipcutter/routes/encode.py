@@ -1,4 +1,5 @@
 """Encoding endpoints."""
+import os
 import threading
 from pathlib import Path
 from typing import List, Optional
@@ -205,5 +206,13 @@ def create_router(state: AppState) -> APIRouter:
             update_clip_status(meta_path, filename, "discarded")
 
         return {"status": "deleted"}
+
+    @router.get("/api/open-folder/kept/{video_stem}")
+    def open_folder(video_stem: str):
+        folder = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem
+        if not folder.exists():
+            raise HTTPException(404, "Folder not found")
+        os.startfile(str(folder))
+        return {"status": "opened"}
 
     return router
