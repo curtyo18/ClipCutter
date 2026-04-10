@@ -3,6 +3,7 @@
 import json
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -269,10 +270,6 @@ class TestDeleteKeptClip:
         assert len(kept_for_stem) == 0
 
 
-import os
-from unittest.mock import patch
-
-
 class TestOpenFolder:
     def test_open_folder_not_found_returns_404(self, output_dir, app_client):
         resp = app_client.get("/api/open-folder/kept/no_such_stem")
@@ -286,7 +283,7 @@ class TestOpenFolder:
         app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
                         json={"segments": []})
 
-        with patch("os.startfile") as mock_startfile:
+        with patch("clipcutter.routes.encode.os.startfile") as mock_startfile:
             resp = app_client.get(f"/api/open-folder/kept/{stem}")
 
         assert resp.status_code == 200
