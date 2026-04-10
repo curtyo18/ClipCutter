@@ -81,9 +81,10 @@ def create_router(state: AppState) -> APIRouter:
                     "confidence": clip.confidence,
                     "video_url": f"/video/{video_stem}/{clip.filename}",
                     "highlight_regions": clip.highlight_regions or [],
+                    "processed_at": meta_data.get("processed_at", ""),
                 })
 
-        clips.sort(key=lambda c: -c["confidence"])
+        clips.sort(key=lambda c: (c["processed_at"], c["confidence"]), reverse=True)
         return {"clips": clips, "total": len(clips)}
 
     @router.get("/video/{video_stem}/{filename}")

@@ -265,3 +265,42 @@ class TestMultiSegmentKeep:
 def _load_meta(output_dir: Path, video_stem: str) -> dict:
     meta_path = output_dir / "metadata" / f"{video_stem}_clips.json"
     return json.loads(meta_path.read_text(encoding="utf-8"))
+
+
+class TestReviewSortOrder:
+    """Clips sorted: newest-processed-video first, then by confidence within video."""
+
+    def test_review_sorted_newest_video_first(self, output_dir, app_client):
+        # The older video's clip has a higher confidence (0.95) so it would sort
+        # first under the old confidence-only sort. The newer video's clip has
+        # lower confidence (0.5). After the fix, newest-processed-date wins over
+        # confidence, so the newer stem should appear first.
+        older_stem = "sort_older_review"
+        newer_stem = "sort_newer_review"
+
+        older_clip = create_pending_clip(
+            output_dir, older_stem, "clip_001.mp4",
+            source_video="/fake/older.mp4",
+            confidence=0.95,
+        )
+        save_test_metadata(output_dir, older_stem, [older_clip], "/fake/older.mp4",
+                           processed_at="2025-01-01T00:00:00")
+
+        newer_clip = create_pending_clip(
+            output_dir, newer_stem, "clip_001.mp4",
+            source_video="/fake/newer.mp4",
+            confidence=0.50,
+        )
+        save_test_metadata(output_dir, newer_stem, [newer_clip], "/fake/newer.mp4",
+                           processed_at="2026-06-01T00:00:00")
+
+        resp = app_client.get("/api/clips")
+        assert resp.status_code == 200
+        clips = resp.json()["clips"]
+        test_clips = [c for c in clips
+                      if c["video_stem"] in {older_stem, newer_stem}]
+        assert len(test_clips) == 2
+        assert test_clips[0]["video_stem"] == newer_stem, (
+            "Newer-processed video clips should appear first"
+        )
+        assert test_clips[1]["video_stem"] == older_stem
