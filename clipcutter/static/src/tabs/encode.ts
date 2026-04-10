@@ -95,7 +95,8 @@ export function renderExportView(): void {
             + `data-stem="${escapeHtml(clip.video_stem)}" data-filename="${escapeHtml(clip.filename)}" `
             + `onclick="window._cc.deleteKeptClipHandler(this)">✕</button>`;
       html += `<button class="btn-secondary" style="padding:2px 8px;font-size:12px" `
-            + `onclick="window._cc.openFolderHandler('${escapeHtml(clip.video_stem)}')" title="Open folder in Explorer">📁</button>`;
+            + `data-stem="${escapeHtml(clip.video_stem)}" `
+            + `onclick="window._cc.openFolderHandler(this.dataset.stem)" title="Open folder in Explorer">📁</button>`;
       html += `</div>`;
     }
     html += `</div>`;
@@ -430,7 +431,8 @@ export async function deleteKeptClipHandler(btn: HTMLButtonElement): Promise<voi
   }
 }
 
-export async function openFolderHandler(video_stem: string): Promise<void> {
+export async function openFolderHandler(video_stem: string | undefined): Promise<void> {
+  if (!video_stem) return;
   try {
     await openKeptFolder(video_stem);
   } catch (e) {
@@ -439,6 +441,7 @@ export async function openFolderHandler(video_stem: string): Promise<void> {
 }
 
 export function previewClip(index: number): void {
+  document.getElementById('clipPreviewModal')?.remove();  // close any existing modal
   const clip = keptClips[index];
   const url = clip.encoded_video_url || clip.video_url;
 
