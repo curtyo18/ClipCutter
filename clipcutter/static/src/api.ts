@@ -268,3 +268,7 @@ export const createPlaylist = (title: string, privacy: string) =>
 
 export const deleteKeptClip = (videoStem: string, filename: string) =>
   apiDelete(`/api/kept/${encodeURIComponent(videoStem)}/${encodeURIComponent(filename)}`);
+
+export async function openKeptFolder(video_stem: string): Promise<void> {
+  await apiGet<{ status: string }>(`/api/open-folder/kept/${encodeURIComponent(video_stem)}`);
+}

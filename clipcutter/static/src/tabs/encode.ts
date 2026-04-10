@@ -2,6 +2,7 @@ import {
   fetchKeptClips, fetchPresets, startEncoding, fetchEncodeStatus, cancelEncoding,
   fetchYouTubeStatus, fetchYouTubePlaylists, startYouTubeAuth, revokeYouTubeAuth,
   startUpload, fetchUploadStatus, cancelUpload, createPlaylist, deleteKeptClip,
+  openKeptFolder,
 } from '../api';
 import type { KeptClipInfo, Playlist } from '../api';
 import { escapeHtml, fmtTime, formatClipTitle } from '../utils';
@@ -84,7 +85,7 @@ export function renderExportView(): void {
       const badge = clip.encoded_exists ? `<span class="badge badge-encoded">Encoded</span>` : '';
       html += `<div class="clip-row">`;
       html += `<input type="checkbox" class="clip-checkbox encode-cb" data-index="${i}" checked>`;
-      html += `<span class="clip-name" title="${escapeHtml(clip.filename)}">${escapeHtml(clip.custom_name || clip.filename)}</span>`;
+      html += `<span class="clip-name" title="${escapeHtml(clip.filename)}" style="cursor:pointer" onclick="window._cc.previewClip(${i})">${escapeHtml(clip.custom_name || clip.filename)}</span>`;
       html += `<span class="clip-detail">${escapeHtml(clip.video_stem || '')}</span>`;
       html += `<span class="clip-detail">${dur}</span>`;
       html += `<span class="clip-detail" style="color:#888">${date}</span>`;
@@ -93,6 +94,8 @@ export function renderExportView(): void {
       html += `<button class="btn-cancel" style="margin-left:auto;padding:2px 8px;font-size:12px" `
             + `data-stem="${escapeHtml(clip.video_stem)}" data-filename="${escapeHtml(clip.filename)}" `
             + `onclick="window._cc.deleteKeptClipHandler(this)">✕</button>`;
+      html += `<button class="btn-secondary" style="padding:2px 8px;font-size:12px" `
+            + `onclick="window._cc.openFolderHandler('${escapeHtml(clip.video_stem)}')" title="Open folder in Explorer">📁</button>`;
       html += `</div>`;
     }
     html += `</div>`;
@@ -425,4 +428,40 @@ export async function deleteKeptClipHandler(btn: HTMLButtonElement): Promise<voi
   } catch (e) {
     alert((e as Error).message);
   }
+}
+
+export async function openFolderHandler(video_stem: string): Promise<void> {
+  try {
+    await openKeptFolder(video_stem);
+  } catch (e) {
+    alert((e as Error).message);
+  }
+}
+
+export function previewClip(index: number): void {
+  const clip = keptClips[index];
+  const url = clip.encoded_video_url || clip.video_url;
+
+  const modal = document.createElement('div');
+  modal.id = 'clipPreviewModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:1000;display:flex;align-items:center;justify-content:center';
+
+  const video = document.createElement('video');
+  video.src = url;
+  video.controls = true;
+  video.autoplay = true;
+  video.style.cssText = 'max-width:90vw;max-height:85vh';
+
+  modal.appendChild(video);
+  document.body.appendChild(modal);
+
+  const close = (): void => {
+    video.pause();
+    modal.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+
+  const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
 }
