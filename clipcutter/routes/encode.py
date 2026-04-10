@@ -202,6 +202,10 @@ def create_router(state: AppState) -> APIRouter:
 
         kept_path.unlink()
 
+        # Remove the parent folder if it's now empty
+        if kept_path.parent.is_dir() and not any(kept_path.parent.iterdir()):
+            kept_path.parent.rmdir()
+
         if meta_path.exists():
             update_clip_status(meta_path, filename, "discarded")
 

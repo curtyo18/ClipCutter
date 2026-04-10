@@ -269,6 +269,21 @@ class TestDeleteKeptClip:
                          if c["video_stem"] == stem]
         assert len(kept_for_stem) == 0
 
+    def test_delete_removes_empty_folder(self, output_dir, app_client):
+        stem = "emptyfoldervid"
+        clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
+                                   source_video="/fake/emptyfoldervid.mp4")
+        save_test_metadata(output_dir, stem, [clip], "/fake/emptyfoldervid.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
+                        json={"segments": []})
+
+        kept_dir = output_dir / "clips" / "kept" / stem
+        assert kept_dir.exists()
+
+        app_client.delete(f"/api/kept/{stem}/clip_001.mp4")
+
+        assert not kept_dir.exists(), "Empty kept folder should be removed after last clip deleted"
+
 
 class TestOpenFolder:
     def test_open_folder_not_found_returns_404(self, output_dir, app_client):
