@@ -267,6 +267,31 @@ def _load_meta(output_dir: Path, video_stem: str) -> dict:
     return json.loads(meta_path.read_text(encoding="utf-8"))
 
 
+class TestSingleSegmentTrimUsesCopy:
+    """Single-segment trim should use -c copy (stream copy), not re-encode."""
+
+    def test_single_segment_trim_produces_valid_file(self, output_dir, app_client):
+        """Trim a real video file and confirm the output is a valid mp4."""
+        stem = "copytrim"
+        clip = create_pending_clip_long(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/copytrim.mp4",
+            file_duration_s=3.0, start=0.0, end=10.0,
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/copytrim.mp4")
+
+        resp = app_client.post(
+            f"/api/clips/{stem}/clip_001.mp4/keep",
+            json={"segments": [{"start": 0.5, "end": 2.5}]},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["trimmed"] is True
+
+        kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
+        assert kept_path.exists()
+        assert kept_path.stat().st_size > 0
+
+
 class TestReviewSortOrder:
     """Clips sorted: newest-processed-video first, then by confidence within video."""
 

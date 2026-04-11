@@ -218,7 +218,7 @@ def create_router(state: AppState) -> APIRouter:
                 pass
             trimmed = False
         elif len(segments) == 1:
-            # Single segment trim
+            # Single segment trim — use stream copy to avoid quality loss
             seg = segments[0]
             duration = seg.end - seg.start
             result = subprocess.run(
@@ -226,7 +226,7 @@ def create_router(state: AppState) -> APIRouter:
                  "-ss", f"{seg.start:.3f}",
                  "-i", str(clip_path),
                  "-t", f"{duration:.3f}",
-                 "-c:v", "libx264", "-c:a", "aac",
+                 "-c", "copy",
                  "-avoid_negative_ts", "make_zero",
                  str(dest)],
                 capture_output=True, text=True,
