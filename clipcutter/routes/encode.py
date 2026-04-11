@@ -97,14 +97,21 @@ def create_router(state: AppState) -> APIRouter:
                     "youtube_upload_status": clip.youtube_upload_status,
                 }
 
+                # File size of kept clip
+                clip_info["size_mb"] = round(clip_path.stat().st_size / (1024 * 1024), 1)
+
                 # Check if encoded file actually exists
                 if clip.encoded_filename:
                     enc_path = state.output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / clip.encoded_filename
                     clip_info["encoded_exists"] = enc_path.exists()
                     if enc_path.exists():
                         clip_info["encoded_video_url"] = f"/video/encoded/{video_stem}/{clip.encoded_filename}"
+                        clip_info["encoded_size_mb"] = round(enc_path.stat().st_size / (1024 * 1024), 1)
+                    else:
+                        clip_info["encoded_size_mb"] = None
                 else:
                     clip_info["encoded_exists"] = False
+                    clip_info["encoded_size_mb"] = None
 
                 clips.append(clip_info)
 

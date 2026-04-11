@@ -308,6 +308,53 @@ class TestOpenFolder:
         assert stem in called_path
 
 
+class TestKeptClipSizes:
+    """size_mb and encoded_size_mb fields present in /api/kept response."""
+
+    def test_size_mb_present(self, output_dir, app_client):
+        stem = "sizevid"
+        clip = create_pending_clip_long(output_dir, stem, "clip_001.mp4",
+                                        source_video="/fake/sizevid.mp4",
+                                        file_duration_s=120.0)
+        save_test_metadata(output_dir, stem, [clip], "/fake/sizevid.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+
+        resp = app_client.get("/api/kept")
+        assert resp.status_code == 200
+        kept = next(c for c in resp.json()["clips"] if c["video_stem"] == stem)
+        assert "size_mb" in kept
+        assert kept["size_mb"] > 0
+
+    def test_encoded_size_mb_null_when_not_encoded(self, output_dir, app_client):
+        stem = "sizevid2"
+        clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
+                                   source_video="/fake/sizevid2.mp4")
+        save_test_metadata(output_dir, stem, [clip], "/fake/sizevid2.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+
+        resp = app_client.get("/api/kept")
+        kept = next(c for c in resp.json()["clips"] if c["video_stem"] == stem)
+        assert kept["encoded_size_mb"] is None
+
+    def test_encoded_size_mb_present_after_encode(self, output_dir, app_client):
+        stem = "sizeenc"
+        clip = create_pending_clip_long(output_dir, stem, "clip_001.mp4",
+                                        source_video="/fake/sizeenc.mp4",
+                                        file_duration_s=120.0)
+        save_test_metadata(output_dir, stem, [clip], "/fake/sizeenc.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        app_client.post("/api/encode", json={
+            "clips": [{"video_stem": stem, "filename": "clip_001.mp4"}],
+            "preset": "original",
+        })
+        _wait_encoding(app_client)
+
+        resp = app_client.get("/api/kept")
+        kept = next(c for c in resp.json()["clips"] if c["video_stem"] == stem)
+        assert kept["encoded_size_mb"] is not None
+        assert kept["encoded_size_mb"] > 0
+
+
 class TestStorageSummary:
     """GET /api/storage-summary returns counts and sizes for kept/encoded/compilations."""
 
