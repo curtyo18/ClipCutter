@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from clipcutter.config import DIR_CLIPS, DIR_ENCODED, DIR_KEPT, DIR_METADATA
+from clipcutter.config import DIR_CLIPS, DIR_COMPILATIONS, DIR_ENCODED, DIR_KEPT, DIR_METADATA
 from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_encoding, update_clip_status
 from clipcutter.routes._helpers import _media_type, _sanitize_filename
 from clipcutter.state import AppState
@@ -218,5 +218,28 @@ def create_router(state: AppState) -> APIRouter:
             raise HTTPException(404, "Folder not found")
         os.startfile(str(folder))
         return {"status": "opened"}
+
+    @router.get("/api/storage-summary")
+    def storage_summary():
+        def _scan(path: Path) -> tuple[int, float]:
+            count = 0
+            size_mb = 0.0
+            if path.exists():
+                for f in path.rglob("*"):
+                    if f.is_file() and not f.name.startswith("."):
+                        count += 1
+                        size_mb += f.stat().st_size / (1024 * 1024)
+            return count, round(size_mb, 1)
+
+        kept_count, kept_mb = _scan(state.output_dir / DIR_CLIPS / DIR_KEPT)
+        enc_count, enc_mb = _scan(state.output_dir / DIR_CLIPS / DIR_ENCODED)
+        comp_count, comp_mb = _scan(state.output_dir / DIR_CLIPS / DIR_COMPILATIONS)
+
+        return {
+            "kept": {"count": kept_count, "size_mb": kept_mb},
+            "encoded": {"count": enc_count, "size_mb": enc_mb},
+            "compilations": {"count": comp_count, "size_mb": comp_mb},
+            "total_mb": round(kept_mb + enc_mb + comp_mb, 1),
+        }
 
     return router

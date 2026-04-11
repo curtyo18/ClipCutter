@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import create_pending_clip, save_test_metadata
+from tests.conftest import create_pending_clip, create_pending_clip_long, save_test_metadata
 
 
 class TestEncodingPresets:
@@ -306,3 +306,40 @@ class TestOpenFolder:
         mock_startfile.assert_called_once()
         called_path = mock_startfile.call_args[0][0]
         assert stem in called_path
+
+
+class TestStorageSummary:
+    """GET /api/storage-summary returns counts and sizes for kept/encoded/compilations."""
+
+    def test_empty_returns_zeros(self, output_dir, app_client):
+        resp = app_client.get("/api/storage-summary")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["kept"] == {"count": 0, "size_mb": 0.0}
+        assert data["encoded"] == {"count": 0, "size_mb": 0.0}
+        assert data["compilations"] == {"count": 0, "size_mb": 0.0}
+        assert data["total_mb"] == 0.0
+
+    def test_counts_kept_clips(self, output_dir, app_client):
+        stem = "summary_test"
+        clip = create_pending_clip_long(output_dir, stem, "clip_001.mp4",
+                                        source_video="/fake/summary.mp4",
+                                        file_duration_s=120.0)
+        save_test_metadata(output_dir, stem, [clip], "/fake/summary.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+
+        resp = app_client.get("/api/storage-summary")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["kept"]["count"] == 1
+        assert data["kept"]["size_mb"] > 0
+        assert data["total_mb"] == data["kept"]["size_mb"]
+
+    def test_total_sums_categories(self, output_dir, app_client):
+        resp = app_client.get("/api/storage-summary")
+        data = resp.json()
+        expected = round(
+            data["kept"]["size_mb"] + data["encoded"]["size_mb"] + data["compilations"]["size_mb"],
+            1,
+        )
+        assert data["total_mb"] == expected
