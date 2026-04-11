@@ -2,6 +2,7 @@
 import json
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +25,7 @@ class Segment(BaseModel):
 class KeepRequest(BaseModel):
     segments: list[Segment] = []
     custom_name: Optional[str] = None
+    quality: str = "copy"  # "copy" | "precise" | "ultra"
 
 
 def create_router(state: AppState) -> APIRouter:
@@ -235,26 +237,72 @@ def create_router(state: AppState) -> APIRouter:
                 raise HTTPException(500, f"FFmpeg failed: {result.stderr[-200:]}")
             trimmed = True
         else:
-            # Multiple segments: use concat filter
-            inputs = []
-            for seg in segments:
-                inputs += ["-ss", f"{seg.start:.3f}", "-t", f"{seg.end - seg.start:.3f}", "-i", str(clip_path)]
+            # Multiple segments
+            quality = req.quality if req and req.quality in ("copy", "precise", "ultra") else "copy"
 
-            n = len(segments)
-            filter_inputs = "".join(f"[{i}:v][{i}:a]" for i in range(n))
-            filter_complex = f"{filter_inputs}concat=n={n}:v=1:a=1[v][a]"
+            if quality == "copy":
+                # Two-pass: extract each segment with -c copy, then concat demuxer
+                tmp_dir = Path(tempfile.mkdtemp())
+                try:
+                    seg_files = []
+                    for j, seg in enumerate(segments):
+                        seg_path = tmp_dir / f"seg_{j}.mp4"
+                        result = subprocess.run(
+                            ["ffmpeg", "-y",
+                             "-ss", f"{seg.start:.3f}",
+                             "-t", f"{seg.end - seg.start:.3f}",
+                             "-i", str(clip_path),
+                             "-c", "copy",
+                             "-avoid_negative_ts", "make_zero",
+                             str(seg_path)],
+                            capture_output=True, text=True,
+                        )
+                        if result.returncode != 0:
+                            raise HTTPException(500, f"FFmpeg segment extract failed: {result.stderr[-200:]}")
+                        seg_files.append(seg_path)
 
-            result = subprocess.run(
-                ["ffmpeg", "-y"]
-                + inputs
-                + ["-filter_complex", filter_complex,
-                   "-map", "[v]", "-map", "[a]",
-                   "-c:v", "libx264", "-c:a", "aac",
-                   str(dest)],
-                capture_output=True, text=True,
-            )
-            if result.returncode != 0:
-                raise HTTPException(500, f"FFmpeg failed: {result.stderr[-200:]}")
+                    filelist = tmp_dir / "filelist.txt"
+                    filelist.write_text(
+                        "\n".join(f"file '{p}'" for p in seg_files),
+                        encoding="utf-8",
+                    )
+
+                    result = subprocess.run(
+                        ["ffmpeg", "-y",
+                         "-f", "concat", "-safe", "0",
+                         "-i", str(filelist),
+                         "-c", "copy",
+                         str(dest)],
+                        capture_output=True, text=True,
+                    )
+                    if result.returncode != 0:
+                        raise HTTPException(500, f"FFmpeg concat failed: {result.stderr[-200:]}")
+                finally:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            else:
+                # Re-encode with quality setting
+                crf = "16" if quality == "precise" else "0"
+                inputs = []
+                for seg in segments:
+                    inputs += ["-ss", f"{seg.start:.3f}", "-t", f"{seg.end - seg.start:.3f}", "-i", str(clip_path)]
+
+                n = len(segments)
+                filter_inputs = "".join(f"[{i}:v][{i}:a]" for i in range(n))
+                filter_complex = f"{filter_inputs}concat=n={n}:v=1:a=1[v][a]"
+
+                result = subprocess.run(
+                    ["ffmpeg", "-y"]
+                    + inputs
+                    + ["-filter_complex", filter_complex,
+                       "-map", "[v]", "-map", "[a]",
+                       "-c:v", "libx264", "-crf", crf, "-c:a", "aac",
+                       str(dest)],
+                    capture_output=True, text=True,
+                )
+                if result.returncode != 0:
+                    raise HTTPException(500, f"FFmpeg failed: {result.stderr[-200:]}")
+
             trimmed = True
 
         update_clip_status(meta_path, filename, "kept")

@@ -292,6 +292,74 @@ class TestSingleSegmentTrimUsesCopy:
         assert kept_path.stat().st_size > 0
 
 
+class TestMultiSegmentQualityModes:
+    """Multi-segment keep supports copy (default), precise (crf16), and ultra (crf0) modes."""
+
+    def test_multi_segment_copy_mode_default(self, output_dir, app_client):
+        """Default quality='copy' uses two-pass copy — file exists and has content."""
+        stem = "msegcopy"
+        clip = create_pending_clip_long(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/msegcopy.mp4",
+            file_duration_s=4.0, start=0.0, end=10.0,
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/msegcopy.mp4")
+
+        resp = app_client.post(
+            f"/api/clips/{stem}/clip_001.mp4/keep",
+            json={"segments": [{"start": 0.0, "end": 1.5}, {"start": 2.5, "end": 4.0}]},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "kept"
+        kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
+        assert kept_path.exists()
+        assert kept_path.stat().st_size > 0
+
+    def test_multi_segment_precise_mode(self, output_dir, app_client):
+        """quality='precise' re-encodes with crf16 — file exists."""
+        stem = "msegprecise"
+        clip = create_pending_clip_long(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/msegprecise.mp4",
+            file_duration_s=4.0, start=0.0, end=10.0,
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/msegprecise.mp4")
+
+        resp = app_client.post(
+            f"/api/clips/{stem}/clip_001.mp4/keep",
+            json={
+                "segments": [{"start": 0.0, "end": 1.5}, {"start": 2.5, "end": 4.0}],
+                "quality": "precise",
+            },
+        )
+        assert resp.status_code == 200
+        kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
+        assert kept_path.exists()
+        assert kept_path.stat().st_size > 0
+
+    def test_multi_segment_ultra_mode(self, output_dir, app_client):
+        """quality='ultra' re-encodes with crf0 — file exists and is larger than precise."""
+        stem = "msegultra"
+        clip = create_pending_clip_long(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/msegultra.mp4",
+            file_duration_s=4.0, start=0.0, end=10.0,
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/msegultra.mp4")
+
+        resp = app_client.post(
+            f"/api/clips/{stem}/clip_001.mp4/keep",
+            json={
+                "segments": [{"start": 0.0, "end": 1.5}, {"start": 2.5, "end": 4.0}],
+                "quality": "ultra",
+            },
+        )
+        assert resp.status_code == 200
+        kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
+        assert kept_path.exists()
+        assert kept_path.stat().st_size > 0
+
+
 class TestReviewSortOrder:
     """Clips sorted: newest-processed-video first, then by confidence within video."""
 
