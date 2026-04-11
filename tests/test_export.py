@@ -336,6 +336,13 @@ class TestStorageSummary:
         assert data["total_mb"] == data["kept"]["size_mb"]
 
     def test_total_sums_categories(self, output_dir, app_client):
+        stem = "sumtotal"
+        clip = create_pending_clip_long(output_dir, stem, "clip_001.mp4",
+                                        source_video="/fake/sumtotal.mp4",
+                                        file_duration_s=120.0)
+        save_test_metadata(output_dir, stem, [clip], "/fake/sumtotal.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+
         resp = app_client.get("/api/storage-summary")
         data = resp.json()
         expected = round(
@@ -343,3 +350,4 @@ class TestStorageSummary:
             1,
         )
         assert data["total_mb"] == expected
+        assert data["kept"]["size_mb"] > 0  # Ensure non-trivial state

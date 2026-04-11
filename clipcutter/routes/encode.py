@@ -226,7 +226,7 @@ def create_router(state: AppState) -> APIRouter:
             size_mb = 0.0
             if path.exists():
                 for f in path.rglob("*"):
-                    if f.is_file() and not f.name.startswith("."):
+                    if f.is_file() and not f.name.startswith(".") and f.suffix != ".json":
                         count += 1
                         size_mb += f.stat().st_size / (1024 * 1024)
             return count, round(size_mb, 1)
