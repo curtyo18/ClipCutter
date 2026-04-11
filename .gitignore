@@ -58,3 +58,4 @@ __pycache__
 clipcutter/static/node_modules/
 clipcutter/static/dist/
 .superpowers/
+.worktrees/
