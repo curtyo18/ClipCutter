@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import create_pending_clip, save_test_metadata
+from tests.conftest import create_pending_clip, create_pending_clip_long, save_test_metadata
 
 
 class TestEncodingPresets:
@@ -306,3 +306,162 @@ class TestOpenFolder:
         mock_startfile.assert_called_once()
         called_path = mock_startfile.call_args[0][0]
         assert stem in called_path
+
+
+class TestKeptClipSizes:
+    """size_mb and encoded_size_mb fields present in /api/kept response."""
+
+    def test_size_mb_present(self, output_dir, app_client):
+        stem = "sizevid"
+        clip = create_pending_clip_long(output_dir, stem, "clip_001.mp4",
+                                        source_video="/fake/sizevid.mp4",
+                                        file_duration_s=120.0)
+        save_test_metadata(output_dir, stem, [clip], "/fake/sizevid.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+
+        resp = app_client.get("/api/kept")
+        assert resp.status_code == 200
+        kept = next(c for c in resp.json()["clips"] if c["video_stem"] == stem)
+        assert "size_mb" in kept
+        assert kept["size_mb"] > 0
+
+    def test_encoded_size_mb_null_when_not_encoded(self, output_dir, app_client):
+        stem = "sizevid2"
+        clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
+                                   source_video="/fake/sizevid2.mp4")
+        save_test_metadata(output_dir, stem, [clip], "/fake/sizevid2.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+
+        resp = app_client.get("/api/kept")
+        kept = next(c for c in resp.json()["clips"] if c["video_stem"] == stem)
+        assert kept["encoded_size_mb"] is None
+
+    def test_encoded_size_mb_present_after_encode(self, output_dir, app_client):
+        stem = "sizeenc"
+        clip = create_pending_clip_long(output_dir, stem, "clip_001.mp4",
+                                        source_video="/fake/sizeenc.mp4",
+                                        file_duration_s=120.0)
+        save_test_metadata(output_dir, stem, [clip], "/fake/sizeenc.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        app_client.post("/api/encode", json={
+            "clips": [{"video_stem": stem, "filename": "clip_001.mp4"}],
+            "preset": "original",
+        })
+        _wait_encoding(app_client)
+
+        resp = app_client.get("/api/kept")
+        kept = next(c for c in resp.json()["clips"] if c["video_stem"] == stem)
+        assert kept["encoded_size_mb"] is not None
+        assert kept["encoded_size_mb"] > 0
+
+
+class TestDeleteEncodedClip:
+    """DELETE /api/encoded/{stem}/{filename} removes encoded file and clears metadata."""
+
+    def test_delete_encoded_removes_file(self, output_dir, app_client):
+        stem = "delencvid"
+        clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
+                                   source_video="/fake/delencvid.mp4")
+        save_test_metadata(output_dir, stem, [clip], "/fake/delencvid.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        app_client.post("/api/encode", json={
+            "clips": [{"video_stem": stem, "filename": "clip_001.mp4"}],
+            "preset": "original",
+        })
+        _wait_encoding(app_client)
+
+        # Confirm encoded file exists
+        encoded_dir = output_dir / "clips" / "encoded" / stem
+        assert encoded_dir.exists()
+        encoded_files = list(encoded_dir.iterdir())
+        assert len(encoded_files) == 1
+
+        resp = app_client.delete(f"/api/encoded/{stem}/clip_001.mp4")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "deleted"
+        assert resp.json()["freed_mb"] >= 0
+        assert not any(encoded_dir.iterdir()) if encoded_dir.exists() else True
+
+    def test_delete_encoded_clears_metadata(self, output_dir, app_client):
+        stem = "delencmeta"
+        clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
+                                   source_video="/fake/delencmeta.mp4")
+        save_test_metadata(output_dir, stem, [clip], "/fake/delencmeta.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        app_client.post("/api/encode", json={
+            "clips": [{"video_stem": stem, "filename": "clip_001.mp4"}],
+            "preset": "original",
+        })
+        _wait_encoding(app_client)
+
+        app_client.delete(f"/api/encoded/{stem}/clip_001.mp4")
+
+        meta = _load_meta(output_dir, stem)
+        assert meta["clips"][0]["encoded_filename"] is None
+        assert meta["clips"][0]["encoding_preset"] is None
+
+    def test_delete_encoded_not_found_returns_404(self, output_dir, app_client):
+        resp = app_client.delete("/api/encoded/fakevid/clip_001.mp4")
+        assert resp.status_code == 404
+
+    def test_kept_clip_untouched_after_delete_encoded(self, output_dir, app_client):
+        stem = "delenckeep"
+        clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
+                                   source_video="/fake/delenckeep.mp4")
+        save_test_metadata(output_dir, stem, [clip], "/fake/delenckeep.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        app_client.post("/api/encode", json={
+            "clips": [{"video_stem": stem, "filename": "clip_001.mp4"}],
+            "preset": "original",
+        })
+        _wait_encoding(app_client)
+
+        app_client.delete(f"/api/encoded/{stem}/clip_001.mp4")
+
+        kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
+        assert kept_path.exists(), "Kept clip must still exist after deleting encoded version"
+
+
+class TestStorageSummary:
+    """GET /api/storage-summary returns counts and sizes for kept/encoded/compilations."""
+
+    def test_empty_returns_zeros(self, output_dir, app_client):
+        resp = app_client.get("/api/storage-summary")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["kept"] == {"count": 0, "size_mb": 0.0}
+        assert data["encoded"] == {"count": 0, "size_mb": 0.0}
+        assert data["compilations"] == {"count": 0, "size_mb": 0.0}
+        assert data["total_mb"] == 0.0
+
+    def test_counts_kept_clips(self, output_dir, app_client):
+        stem = "summary_test"
+        clip = create_pending_clip_long(output_dir, stem, "clip_001.mp4",
+                                        source_video="/fake/summary.mp4",
+                                        file_duration_s=120.0)
+        save_test_metadata(output_dir, stem, [clip], "/fake/summary.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+
+        resp = app_client.get("/api/storage-summary")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["kept"]["count"] == 1
+        assert data["kept"]["size_mb"] > 0
+        assert data["total_mb"] == data["kept"]["size_mb"]
+
+    def test_total_sums_categories(self, output_dir, app_client):
+        stem = "sumtotal"
+        clip = create_pending_clip_long(output_dir, stem, "clip_001.mp4",
+                                        source_video="/fake/sumtotal.mp4",
+                                        file_duration_s=120.0)
+        save_test_metadata(output_dir, stem, [clip], "/fake/sumtotal.mp4")
+        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+
+        resp = app_client.get("/api/storage-summary")
+        data = resp.json()
+        expected = round(
+            data["kept"]["size_mb"] + data["encoded"]["size_mb"] + data["compilations"]["size_mb"],
+            1,
+        )
+        assert data["total_mb"] == expected
+        assert data["kept"]["size_mb"] > 0  # Ensure non-trivial state

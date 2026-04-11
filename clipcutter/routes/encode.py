@@ -8,8 +8,11 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from clipcutter.config import DIR_CLIPS, DIR_ENCODED, DIR_KEPT, DIR_METADATA
-from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_encoding, update_clip_status
+from clipcutter.config import DIR_CLIPS, DIR_COMPILATIONS, DIR_ENCODED, DIR_KEPT, DIR_METADATA
+from clipcutter.metadata import (
+    load_metadata, load_metadata_dict, update_clip_encoding,
+    update_clip_status, clear_clip_encoding,
+)
 from clipcutter.routes._helpers import _media_type, _sanitize_filename
 from clipcutter.state import AppState
 
@@ -97,14 +100,21 @@ def create_router(state: AppState) -> APIRouter:
                     "youtube_upload_status": clip.youtube_upload_status,
                 }
 
+                # File size of kept clip
+                clip_info["size_mb"] = round(clip_path.stat().st_size / (1024 * 1024), 1)
+
                 # Check if encoded file actually exists
                 if clip.encoded_filename:
                     enc_path = state.output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / clip.encoded_filename
                     clip_info["encoded_exists"] = enc_path.exists()
                     if enc_path.exists():
                         clip_info["encoded_video_url"] = f"/video/encoded/{video_stem}/{clip.encoded_filename}"
+                        clip_info["encoded_size_mb"] = round(enc_path.stat().st_size / (1024 * 1024), 1)
+                    else:
+                        clip_info["encoded_size_mb"] = None
                 else:
                     clip_info["encoded_exists"] = False
+                    clip_info["encoded_size_mb"] = None
 
                 clips.append(clip_info)
 
@@ -218,5 +228,56 @@ def create_router(state: AppState) -> APIRouter:
             raise HTTPException(404, "Folder not found")
         os.startfile(str(folder))
         return {"status": "opened"}
+
+    @router.get("/api/storage-summary")
+    def storage_summary():
+        def _scan(path: Path) -> tuple[int, float]:
+            count = 0
+            size_mb = 0.0
+            if path.exists():
+                for f in path.rglob("*"):
+                    if f.is_file() and not f.name.startswith(".") and f.suffix != ".json":
+                        count += 1
+                        size_mb += f.stat().st_size / (1024 * 1024)
+            return count, round(size_mb, 1)
+
+        kept_count, kept_mb = _scan(state.output_dir / DIR_CLIPS / DIR_KEPT)
+        enc_count, enc_mb = _scan(state.output_dir / DIR_CLIPS / DIR_ENCODED)
+        comp_count, comp_mb = _scan(state.output_dir / DIR_CLIPS / DIR_COMPILATIONS)
+
+        return {
+            "kept": {"count": kept_count, "size_mb": kept_mb},
+            "encoded": {"count": enc_count, "size_mb": enc_mb},
+            "compilations": {"count": comp_count, "size_mb": comp_mb},
+            "total_mb": round(kept_mb + enc_mb + comp_mb, 1),
+        }
+
+    @router.delete("/api/encoded/{video_stem}/{filename}")
+    def delete_encoded_clip(video_stem: str, filename: str):
+        """Delete the encoded version of a kept clip and clear its encoding metadata."""
+        meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+        if not meta_path.exists():
+            raise HTTPException(404, "Clip metadata not found")
+
+        clip_metas = load_metadata(meta_path)
+        encoded_filename = None
+        for clip in clip_metas:
+            if clip.filename == filename and clip.encoded_filename:
+                encoded_filename = clip.encoded_filename
+                break
+
+        if not encoded_filename:
+            raise HTTPException(404, "No encoded version found")
+
+        enc_path = state.output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / encoded_filename
+        freed_mb = 0.0
+        if enc_path.exists():
+            freed_mb = round(enc_path.stat().st_size / (1024 * 1024), 1)
+            enc_path.unlink()
+            if enc_path.parent.is_dir() and not any(enc_path.parent.iterdir()):
+                enc_path.parent.rmdir()
+
+        clear_clip_encoding(meta_path, filename)
+        return {"status": "deleted", "freed_mb": freed_mb}
 
     return router

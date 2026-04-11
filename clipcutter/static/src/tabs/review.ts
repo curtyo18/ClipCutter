@@ -90,9 +90,15 @@ function showClip(): void {
         <button class="trim-btn" data-action="seek-to" data-seg="0" data-which="out">Go</button>
       </div>
     </div>
-    <div style="margin:6px 0">
+    <div style="margin:6px 0;display:flex;align-items:center;gap:12px">
       <button class="trim-btn" data-action="add-segment">+ Add segment</button>
       <span class="trim-indicator" id="trimIndicator"></span>
+      <span class="trim-label" style="margin-left:auto">Trim quality</span>
+      <select class="trim-btn" id="trimQuality" style="cursor:pointer;padding:6px 8px">
+        <option value="copy">Fast (copy)</option>
+        <option value="precise">Precise (CRF 16)</option>
+        <option value="ultra">Ultra (lossless)</option>
+      </select>
     </div>
   `;
 
@@ -276,9 +282,12 @@ export async function clipAction(type: 'keep' | 'skip' | 'discard'): Promise<voi
     const isFullClip = segments.length === 1 && segments[0].start <= 0.1 && (clip.duration - segments[0].end) <= 0.1;
     showOverlay(isFullClip ? 'Saving clip...' : segments.length > 1 ? 'Cutting segments...' : 'Trimming clip...');
     try {
+      const qualitySelect = document.getElementById('trimQuality') as HTMLSelectElement | null;
+      const quality = qualitySelect?.value ?? 'copy';
       await keepClip(clip.video_stem, clip.filename, {
         segments: segments.map(s => ({ start: s.start, end: s.end })),
         custom_name: customName,
+        quality,
       });
     } catch (e) {
       hideOverlay();

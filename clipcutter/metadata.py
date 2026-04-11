@@ -88,6 +88,19 @@ def update_clip_encoding(metadata_path: Path, filename: str,
     tmp.replace(metadata_path)
 
 
+def clear_clip_encoding(metadata_path: Path, filename: str) -> None:
+    """Clear encoding info for a clip in the metadata file."""
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+    for clip in data["clips"]:
+        if clip["filename"] == filename:
+            clip["encoded_filename"] = None
+            clip["encoding_preset"] = None
+            break
+    tmp = metadata_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(metadata_path)
+
+
 def update_clip_youtube(metadata_path: Path, filename: str,
                         video_id: str, url: str,
                         status: str = "uploaded") -> None:
