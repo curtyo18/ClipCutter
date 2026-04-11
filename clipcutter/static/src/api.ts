@@ -38,6 +38,15 @@ export interface KeptClipInfo {
   youtube_url: string | null;
   youtube_upload_status: string | null;
   clipped_at?: string;
+  size_mb?: number;
+  encoded_size_mb?: number | null;
+}
+
+export interface StorageSummary {
+  kept: { count: number; size_mb: number };
+  encoded: { count: number; size_mb: number };
+  compilations: { count: number; size_mb: number };
+  total_mb: number;
 }
 
 export interface WaveformData {
@@ -55,6 +64,7 @@ export interface Segment {
 export interface KeepRequest {
   segments: Segment[];
   custom_name: string | null;
+  quality?: string;
 }
 
 export interface ProcessStatus {
@@ -272,3 +282,11 @@ export const deleteKeptClip = (videoStem: string, filename: string) =>
 export async function openKeptFolder(video_stem: string): Promise<void> {
   await apiGet<{ status: string }>(`/api/open-folder/kept/${encodeURIComponent(video_stem)}`);
 }
+
+export const fetchStorageSummary = () =>
+  apiGet<StorageSummary>('/api/storage-summary');
+
+export const deleteEncodedClip = (videoStem: string, filename: string) =>
+  apiDelete<{ status: string; freed_mb: number }>(
+    `/api/encoded/${encodeURIComponent(videoStem)}/${encodeURIComponent(filename)}`
+  );

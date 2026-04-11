@@ -2,9 +2,9 @@ import {
   fetchKeptClips, fetchPresets, startEncoding, fetchEncodeStatus, cancelEncoding,
   fetchYouTubeStatus, fetchYouTubePlaylists, startYouTubeAuth, revokeYouTubeAuth,
   startUpload, fetchUploadStatus, cancelUpload, createPlaylist, deleteKeptClip,
-  openKeptFolder,
+  openKeptFolder, fetchStorageSummary, deleteEncodedClip, fetchSources, deleteSource,
 } from '../api';
-import type { KeptClipInfo, Playlist } from '../api';
+import type { KeptClipInfo, Playlist, StorageSummary, SourceVideo } from '../api';
 import { escapeHtml, fmtTime, formatClipTitle } from '../utils';
 
 export let keptClips: KeptClipInfo[] = [];
@@ -17,13 +17,17 @@ let ytPlaylists: Playlist[] = [];
 
 let encodingPoll: ReturnType<typeof setInterval> | null = null;
 let uploadPoll: ReturnType<typeof setInterval> | null = null;
+let storageSummary: StorageSummary | null = null;
+let sourcesData: SourceVideo[] = [];
 
 export async function loadExportTab(): Promise<void> {
   try {
-    const [keptData, presetsData, ytStatus] = await Promise.all([
+    const [keptData, presetsData, ytStatus, summaryData, sourcesResp] = await Promise.all([
       fetchKeptClips(),
       fetchPresets(),
       fetchYouTubeStatus(),
+      fetchStorageSummary().catch(() => null),
+      fetchSources().catch(() => ({ sources: [] })),
     ]);
     keptClips = keptData.clips || [];
     encodingPresets = presetsData.presets || [];
@@ -31,6 +35,8 @@ export async function loadExportTab(): Promise<void> {
     encodingFpsOptions = presetsData.fps_options || [null, 24, 30, 60];
     ytAuthenticated = ytStatus.authenticated || false;
     ytChannelName = ytStatus.channel_name || '';
+    storageSummary = summaryData;
+    sourcesData = sourcesResp.sources || [];
 
     if (ytAuthenticated) {
       try {
@@ -46,6 +52,17 @@ export async function loadExportTab(): Promise<void> {
 
 export function renderExportView(): void {
   let html = '';
+
+  // === Storage Summary Bar ===
+  if (storageSummary) {
+    const fmt = (mb: number) => mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb.toFixed(1) + ' MB';
+    html += `<div style="font-size:12px;color:#666;margin-bottom:16px;padding:10px 14px;background:#111;border-radius:8px;display:flex;gap:24px;flex-wrap:wrap">`;
+    html += `<span>Kept: <span style="color:#94a3b8">${storageSummary.kept.count} clips · ${fmt(storageSummary.kept.size_mb)}</span></span>`;
+    html += `<span>Encoded: <span style="color:#94a3b8">${storageSummary.encoded.count} clips · ${fmt(storageSummary.encoded.size_mb)}</span></span>`;
+    html += `<span>Compilations: <span style="color:#94a3b8">${storageSummary.compilations.count} · ${fmt(storageSummary.compilations.size_mb)}</span></span>`;
+    html += `<span style="margin-left:auto">Total: <span style="color:#e2e8f0;font-weight:600">${fmt(storageSummary.total_mb)}</span></span>`;
+    html += `</div>`;
+  }
 
   // === Encode Clips ===
   html += `<div class="export-section"><h2>Encode Clips</h2>`;
@@ -82,7 +99,27 @@ export function renderExportView(): void {
       const tags = (clip.detection_reasons || []).map(r =>
         `<span class="tag tag-${r}">${r.replace('_', ' ')}</span>`
       ).join('');
-      const badge = clip.encoded_exists ? `<span class="badge badge-encoded">Encoded</span>` : '';
+
+      // Size display
+      const keptMb = clip.size_mb != null ? clip.size_mb.toFixed(1) + ' MB' : '';
+      let sizeHtml = '';
+      if (keptMb) {
+        if (clip.encoded_exists && clip.encoded_size_mb != null) {
+          sizeHtml = `<span class="clip-detail">${keptMb} → ${clip.encoded_size_mb.toFixed(1)} MB</span>`;
+        } else {
+          sizeHtml = `<span class="clip-detail">${keptMb}</span>`;
+        }
+      }
+
+      // Encoded badge + delete-encoded button
+      let encodedHtml = '';
+      if (clip.encoded_exists) {
+        encodedHtml = `<span class="badge badge-encoded">Encoded</span>`;
+        encodedHtml += `<button class="btn-cancel" style="padding:2px 8px;font-size:11px" `
+          + `data-stem="${escapeHtml(clip.video_stem)}" data-filename="${escapeHtml(clip.filename)}" `
+          + `onclick="window._cc.deleteEncodedClipHandler(this)" title="Delete encoded version">✕ encoded</button>`;
+      }
+
       html += `<div class="clip-row">`;
       html += `<input type="checkbox" class="clip-checkbox encode-cb" data-index="${i}" checked>`;
       html += `<span class="clip-name" title="${escapeHtml(clip.filename)}" style="cursor:pointer" onclick="window._cc.previewClip(${i})">${escapeHtml(clip.custom_name || clip.filename)}</span>`;
@@ -90,7 +127,8 @@ export function renderExportView(): void {
       html += `<span class="clip-detail">${dur}</span>`;
       html += `<span class="clip-detail" style="color:#888">${date}</span>`;
       html += `<span class="tags" style="margin-bottom:0">${tags}</span>`;
-      html += badge;
+      html += encodedHtml;
+      html += sizeHtml;
       html += `<button class="btn-cancel" style="margin-left:auto;padding:2px 8px;font-size:12px" `
             + `data-stem="${escapeHtml(clip.video_stem)}" data-filename="${escapeHtml(clip.filename)}" `
             + `onclick="window._cc.deleteKeptClipHandler(this)">✕</button>`;
@@ -197,6 +235,33 @@ export function renderExportView(): void {
     }
   }
   html += `</div>`;
+
+  // === Source Videos ===
+  const deletableSources = sourcesData.filter(s => s.exists);
+  if (deletableSources.length > 0) {
+    html += `<div class="export-section"><h2>Source Videos</h2>`;
+    html += `<p style="color:#888;font-size:13px;margin-bottom:16px">Delete source videos to free disk space. Only sources with existing files are shown.</p>`;
+    for (const src of deletableSources) {
+      const name = src.source_path.split(/[/\\]/).pop() ?? src.source_path;
+      const pending = src.total - src.kept - src.discarded;
+      const reviewSummary = src.fully_reviewed
+        ? `${src.kept} kept / ${src.discarded} discarded`
+        : `${src.kept} kept / ${src.discarded} discarded / ${pending} pending`;
+      const reviewColor = src.fully_reviewed ? '#4ade80' : '#fbbf24';
+      html += `<div class="source-row" id="export-src-${escapeHtml(src.video_stem)}">`;
+      html += `<div class="source-info">`;
+      html += `<div class="source-name" title="${escapeHtml(src.source_path)}">${escapeHtml(name)}</div>`;
+      html += `<div class="source-detail" style="color:${reviewColor}">${reviewSummary}</div>`;
+      html += `</div>`;
+      html += `<div class="source-size">${src.size_mb} MB</div>`;
+      html += `<button class="btn-delete" data-stem="${escapeHtml(src.video_stem)}" `
+            + `onclick="window._cc.deleteSourceFromExportHandler(this.dataset.stem, this)">Delete</button>`;
+      html += `</div>`;
+    }
+    const totalMb = deletableSources.reduce((sum, s) => sum + s.size_mb, 0);
+    html += `<div class="cleanup-total">Total reclaimable: ${totalMb.toFixed(1)} MB</div>`;
+    html += `</div>`;
+  }
 
   document.getElementById('exportContent')!.innerHTML = html;
 
@@ -437,6 +502,48 @@ export async function openFolderHandler(video_stem: string | undefined): Promise
     await openKeptFolder(video_stem);
   } catch (e) {
     alert((e as Error).message);
+  }
+}
+
+export async function deleteEncodedClipHandler(btn: HTMLButtonElement): Promise<void> {
+  const stem = btn.dataset.stem!;
+  const filename = btn.dataset.filename!;
+  if (!confirm(`Delete encoded version of "${filename}"? The original kept clip will remain.`)) return;
+  btn.disabled = true;
+  try {
+    await deleteEncodedClip(stem, filename);
+    const idx = keptClips.findIndex(c => c.video_stem === stem && c.filename === filename);
+    if (idx >= 0) {
+      keptClips[idx].encoded_exists = false;
+      keptClips[idx].encoded_filename = null;
+      keptClips[idx].encoded_size_mb = undefined;
+    }
+    await loadExportTab();
+  } catch (e) {
+    alert((e as Error).message);
+    btn.disabled = false;
+  }
+}
+
+export async function deleteSourceFromExportHandler(videoStem: string, btn: HTMLButtonElement): Promise<void> {
+  if (!confirm('Permanently delete this source video? This cannot be undone.')) return;
+  btn.disabled = true;
+  btn.textContent = 'Deleting...';
+  try {
+    const data = await deleteSource(videoStem);
+    const row = document.getElementById('export-src-' + videoStem);
+    if (row) {
+      row.querySelector('.btn-delete')!.outerHTML = '<button class="btn-deleted">Deleted</button>';
+      const sizeEl = row.querySelector('.source-size') as HTMLElement;
+      let label = data.freed_mb + ' MB freed';
+      if (data.leftover > 0) label += ` (${data.leftover} clip(s) locked)`;
+      sizeEl.textContent = label;
+      sizeEl.style.color = data.leftover > 0 ? '#fbbf24' : '#4ade80';
+    }
+  } catch (e) {
+    alert((e as Error).message);
+    btn.disabled = false;
+    btn.textContent = 'Delete';
   }
 }
 

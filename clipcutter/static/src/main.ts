@@ -1,6 +1,6 @@
 import { initProcessTab, startProcessingHandler, scanFolderHandler, thresholdChangedHandler, deleteFileHandler } from './tabs/process';
 import { loadClips, clipAction, addSegment, removeSegment, focusSegment, setSegmentPoint, seekToSegment, onSegmentInput, updateTrimIndicator, stopWaveformSync, deleteSourceHandler } from './tabs/review';
-import { loadExportTab, renderExportView, toggleAllClips, startEncodingHandler, cancelEncodingHandler, startYouTubeAuthHandler, revokeYouTubeAuthHandler, startUploadHandler, cancelUploadHandler, keptClips, deleteKeptClipHandler, openFolderHandler, previewClip } from './tabs/encode';
+import { loadExportTab, renderExportView, toggleAllClips, startEncodingHandler, cancelEncodingHandler, startYouTubeAuthHandler, revokeYouTubeAuthHandler, startUploadHandler, cancelUploadHandler, keptClips, deleteKeptClipHandler, openFolderHandler, previewClip, deleteEncodedClipHandler, deleteSourceFromExportHandler } from './tabs/encode';
 import { addSelectedToCompilation, renderCompilationList, removeCompClip, updateCompDuration, startCompilationHandler, cancelCompilationHandler, loadPastCompilations, deleteCompilationHandler, deleteCompilationSourcesHandler } from './tabs/compile';
 
 // Expose handlers to HTML via window._cc (avoids global namespace pollution)
@@ -38,6 +38,8 @@ const handlers = {
   deleteKeptClipHandler,
   openFolderHandler,
   previewClip,
+  deleteEncodedClipHandler,
+  deleteSourceFromExportHandler,
   addSelectedToCompilation: () => addSelectedToCompilation(keptClips),
   // Compile
   renderCompilationList,
