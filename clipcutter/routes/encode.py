@@ -9,7 +9,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from clipcutter.config import DIR_CLIPS, DIR_COMPILATIONS, DIR_ENCODED, DIR_KEPT, DIR_METADATA
-from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_encoding, update_clip_status
+from clipcutter.metadata import (
+    load_metadata, load_metadata_dict, update_clip_encoding,
+    update_clip_status, clear_clip_encoding,
+)
 from clipcutter.routes._helpers import _media_type, _sanitize_filename
 from clipcutter.state import AppState
 
@@ -248,5 +251,33 @@ def create_router(state: AppState) -> APIRouter:
             "compilations": {"count": comp_count, "size_mb": comp_mb},
             "total_mb": round(kept_mb + enc_mb + comp_mb, 1),
         }
+
+    @router.delete("/api/encoded/{video_stem}/{filename}")
+    def delete_encoded_clip(video_stem: str, filename: str):
+        """Delete the encoded version of a kept clip and clear its encoding metadata."""
+        meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+        if not meta_path.exists():
+            raise HTTPException(404, "Clip metadata not found")
+
+        clip_metas = load_metadata(meta_path)
+        encoded_filename = None
+        for clip in clip_metas:
+            if clip.filename == filename and clip.encoded_filename:
+                encoded_filename = clip.encoded_filename
+                break
+
+        if not encoded_filename:
+            raise HTTPException(404, "No encoded version found")
+
+        enc_path = state.output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / encoded_filename
+        freed_mb = 0.0
+        if enc_path.exists():
+            freed_mb = round(enc_path.stat().st_size / (1024 * 1024), 1)
+            enc_path.unlink()
+            if enc_path.parent.is_dir() and not any(enc_path.parent.iterdir()):
+                enc_path.parent.rmdir()
+
+        clear_clip_encoding(meta_path, filename)
+        return {"status": "deleted", "freed_mb": freed_mb}
 
     return router
