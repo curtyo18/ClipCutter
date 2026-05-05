@@ -64,5 +64,8 @@ clipcutter/static/dist/
 todo*.txt
 test_results.txt
 
+# Local-only working area (design handovers, scratch dirs, etc.)
+ignored/
+
 # setuptools build metadata
 *.egg-info/
