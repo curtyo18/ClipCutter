@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -197,6 +198,37 @@ def save_test_metadata(output_dir: Path, video_stem: str,
     }
     meta_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return meta_path
+
+
+def keep_and_wait(client, video_stem: str, filename: str,
+                  json_body: dict = None, timeout: float = 30.0) -> dict:
+    """POST /api/clips/{stem}/{filename}/keep and block until the background
+    worker finishes. Returns the final keep-task entry from the status endpoint.
+
+    Phase 4 made the keep endpoint async — it returns {task_id, status="started"}
+    immediately and the ffmpeg work happens in a daemon thread. Tests that need
+    to check the resulting file/metadata state must wait for the task to land.
+    """
+    body = json_body if json_body is not None else {}
+    resp = client.post(f"/api/clips/{video_stem}/{filename}/keep", json=body)
+    if resp.status_code != 200:
+        return {
+            "status": "http_error",
+            "_status_code": resp.status_code,
+            "_text": resp.text,
+        }
+    task_id = resp.json().get("task_id")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        snap = client.get("/api/clips/keep/status").json()
+        my = next((t for t in snap.get("tasks", []) if t["task_id"] == task_id), None)
+        if my is None:
+            # Task GC'd — backend treats it as finished.
+            return {"status": "done", "task_id": task_id, "trimmed": False}
+        if my["status"] in ("done", "error"):
+            return my
+        time.sleep(0.05)
+    raise TimeoutError(f"keep task {task_id} did not finish within {timeout}s")
 
 
 def _make_tiny_mp4(path: Path):

@@ -4,7 +4,7 @@ import json
 import pytest
 from pathlib import Path
 
-from tests.conftest import create_pending_clip, create_pending_clip_long, save_test_metadata
+from tests.conftest import create_pending_clip, create_pending_clip_long, save_test_metadata, keep_and_wait
 
 
 class TestKeepClip:
@@ -18,12 +18,11 @@ class TestKeepClip:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/testvid.mp4")
 
-        resp = app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={"custom_name": "test_clip", "segments": []},
+        result = keep_and_wait(
+            app_client, stem, "clip_001.mp4",
+            json_body={"custom_name": "test_clip", "segments": []},
         )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "kept"
+        assert result["status"] == "done", result
 
         # Verify file in kept directory
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
@@ -43,10 +42,7 @@ class TestKeepClip:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/testvid2.mp4")
 
-        app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={"segments": []},
-        )
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
 
         kept_resp = app_client.get("/api/kept")
         assert kept_resp.status_code == 200
@@ -105,8 +101,7 @@ class TestKeepDiscardMix:
         save_test_metadata(output_dir, stem, clips, "/fake/mixvid.mp4")
 
         # Keep first, discard others
-        app_client.post(f"/api/clips/{stem}/clip_000.mp4/keep",
-                        json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_000.mp4", json_body={"segments": []})
         app_client.post(f"/api/clips/{stem}/clip_001.mp4/discard")
         app_client.post(f"/api/clips/{stem}/clip_002.mp4/discard")
 
@@ -136,17 +131,15 @@ class TestTrimAndCustomName:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/trimvid.mp4")
 
-        resp = app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={
+        result = keep_and_wait(
+            app_client, stem, "clip_001.mp4",
+            json_body={
                 "segments": [{"start": 1.0, "end": 9.0}],
                 "custom_name": "Trimmed",
             },
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "kept"
-        assert data["trimmed"] is True
+        assert result["status"] == "done", result
+        assert result["trimmed"] is True
 
         # Verify kept file exists
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
@@ -166,14 +159,12 @@ class TestTrimAndCustomName:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/notrimvid.mp4")
 
-        resp = app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={"segments": []},
+        result = keep_and_wait(
+            app_client, stem, "clip_001.mp4",
+            json_body={"segments": []},
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "kept"
-        assert data["trimmed"] is False  # Full clip copy, no re-encode
+        assert result["status"] == "done", result
+        assert result["trimmed"] is False  # Full clip copy, no re-encode
 
         # Verify kept file exists
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
@@ -189,12 +180,12 @@ class TestTrimAndCustomName:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/trimdur.mp4")
 
-        resp = app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={"segments": [{"start": 0.0, "end": 1.5}], "custom_name": None},
+        result = keep_and_wait(
+            app_client, stem, "clip_001.mp4",
+            json_body={"segments": [{"start": 0.0, "end": 1.5}], "custom_name": None},
         )
-        assert resp.status_code == 200
-        assert resp.json()["trimmed"] is True
+        assert result["status"] == "done", result
+        assert result["trimmed"] is True
 
         meta = _load_meta(output_dir, stem)
         assert meta["clips"][0]["duration"] == pytest.approx(1.5, abs=0.01)
@@ -209,12 +200,12 @@ class TestTrimAndCustomName:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/nodurchange.mp4")
 
-        resp = app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={"segments": [], "custom_name": None},
+        result = keep_and_wait(
+            app_client, stem, "clip_001.mp4",
+            json_body={"segments": [], "custom_name": None},
         )
-        assert resp.status_code == 200
-        assert resp.json()["trimmed"] is False
+        assert result["status"] == "done", result
+        assert result["trimmed"] is False
 
         meta = _load_meta(output_dir, stem)
         assert meta["clips"][0]["duration"] == 10.0  # unchanged
@@ -234,19 +225,17 @@ class TestMultiSegmentKeep:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/multiseg.mp4")
 
-        resp = app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={
+        result = keep_and_wait(
+            app_client, stem, "clip_001.mp4",
+            json_body={
                 "segments": [
                     {"start": 0.0, "end": 1.5},
                     {"start": 2.5, "end": 4.0},
                 ],
             },
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "kept"
-        assert data["trimmed"] is True
+        assert result["status"] == "done", result
+        assert result["trimmed"] is True
 
         # File must exist (FFmpeg concat ran successfully)
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
@@ -280,12 +269,12 @@ class TestSingleSegmentTrimUsesCopy:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/copytrim.mp4")
 
-        resp = app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={"segments": [{"start": 0.5, "end": 2.5}]},
+        result = keep_and_wait(
+            app_client, stem, "clip_001.mp4",
+            json_body={"segments": [{"start": 0.5, "end": 2.5}]},
         )
-        assert resp.status_code == 200
-        assert resp.json()["trimmed"] is True
+        assert result["status"] == "done", result
+        assert result["trimmed"] is True
 
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
         assert kept_path.exists()
@@ -305,12 +294,11 @@ class TestMultiSegmentQualityModes:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/msegcopy.mp4")
 
-        resp = app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={"segments": [{"start": 0.0, "end": 1.5}, {"start": 2.5, "end": 4.0}]},
+        result = keep_and_wait(
+            app_client, stem, "clip_001.mp4",
+            json_body={"segments": [{"start": 0.0, "end": 1.5}, {"start": 2.5, "end": 4.0}]},
         )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "kept"
+        assert result["status"] == "done", result
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
         assert kept_path.exists()
         assert kept_path.stat().st_size > 0
@@ -325,14 +313,14 @@ class TestMultiSegmentQualityModes:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/msegprecise.mp4")
 
-        resp = app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={
+        result = keep_and_wait(
+            app_client, stem, "clip_001.mp4",
+            json_body={
                 "segments": [{"start": 0.0, "end": 1.5}, {"start": 2.5, "end": 4.0}],
                 "quality": "precise",
             },
         )
-        assert resp.status_code == 200
+        assert result["status"] == "done", result
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
         assert kept_path.exists()
         assert kept_path.stat().st_size > 0
@@ -347,14 +335,14 @@ class TestMultiSegmentQualityModes:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/msegultra.mp4")
 
-        resp = app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={
+        result = keep_and_wait(
+            app_client, stem, "clip_001.mp4",
+            json_body={
                 "segments": [{"start": 0.0, "end": 1.5}, {"start": 2.5, "end": 4.0}],
                 "quality": "ultra",
             },
         )
-        assert resp.status_code == 200
+        assert result["status"] == "done", result
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
         assert kept_path.exists()
         assert kept_path.stat().st_size > 0

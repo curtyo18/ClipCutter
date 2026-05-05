@@ -3,6 +3,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,135 @@ class KeepRequest(BaseModel):
     segments: list[Segment] = []
     custom_name: Optional[str] = None
     quality: str = "copy"  # "copy" | "precise" | "ultra"
+
+
+def _probe_duration(clip_path: Path) -> float:
+    """Probe clip duration with ffprobe; return 0.0 if probe fails."""
+    probe = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(clip_path)],
+        capture_output=True, text=True,
+    )
+    try:
+        data = json.loads(probe.stdout)
+        return float(data.get("format", {}).get("duration", 0))
+    except Exception:
+        return 0.0
+
+
+def _normalise_segments(req: Optional[KeepRequest], clip_duration: float) -> list[Segment]:
+    """Sort segments and substitute the full clip when none were provided."""
+    segments = req.segments if req and req.segments else []
+    if not segments:
+        segments = [Segment(start=0.0, end=clip_duration or 9999.0)]
+    return sorted(segments, key=lambda s: s.start)
+
+
+def _do_keep(
+    *,
+    output_dir: Path,
+    clip_path: Path,
+    video_stem: str,
+    filename: str,
+    segments: list[Segment],
+    clip_duration: float,
+    quality: str,
+) -> bool:
+    """Run the ffmpeg trim/copy for one keep task. Returns whether the file was trimmed."""
+    kept_dir = output_dir / DIR_CLIPS / DIR_KEPT / video_stem
+    kept_dir.mkdir(parents=True, exist_ok=True)
+    dest = kept_dir / filename
+
+    is_full_clip = (
+        len(segments) == 1
+        and segments[0].start <= 0.1
+        and (clip_duration == 0 or (clip_duration - segments[0].end) <= 0.1)
+    )
+
+    if is_full_clip:
+        try:
+            shutil.copy2(str(clip_path), str(dest))
+        except OSError:
+            pass
+        return False
+
+    if len(segments) == 1:
+        seg = segments[0]
+        duration = seg.end - seg.start
+        result = subprocess.run(
+            ["ffmpeg", "-y",
+             "-ss", f"{seg.start:.3f}",
+             "-i", str(clip_path),
+             "-t", f"{duration:.3f}",
+             "-c", "copy",
+             "-avoid_negative_ts", "make_zero",
+             str(dest)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg failed: {result.stderr[-200:]}")
+        return True
+
+    # Multiple segments
+    if quality == "copy":
+        tmp_dir = Path(tempfile.mkdtemp())
+        try:
+            seg_files: list[Path] = []
+            for j, seg in enumerate(segments):
+                seg_path = tmp_dir / f"seg_{j}.mp4"
+                result = subprocess.run(
+                    ["ffmpeg", "-y",
+                     "-ss", f"{seg.start:.3f}",
+                     "-t", f"{seg.end - seg.start:.3f}",
+                     "-i", str(clip_path),
+                     "-c", "copy",
+                     "-avoid_negative_ts", "make_zero",
+                     str(seg_path)],
+                    capture_output=True, text=True,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(f"FFmpeg segment extract failed: {result.stderr[-200:]}")
+                seg_files.append(seg_path)
+
+            filelist = tmp_dir / "filelist.txt"
+            filelist.write_text(
+                "\n".join(f"file '{p}'" for p in seg_files),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                ["ffmpeg", "-y",
+                 "-f", "concat", "-safe", "0",
+                 "-i", str(filelist),
+                 "-c", "copy",
+                 str(dest)],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"FFmpeg concat failed: {result.stderr[-200:]}")
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        return True
+
+    # Re-encode (precise / ultra)
+    crf = "16" if quality == "precise" else "0"
+    inputs: list[str] = []
+    for seg in segments:
+        inputs += ["-ss", f"{seg.start:.3f}", "-t", f"{seg.end - seg.start:.3f}", "-i", str(clip_path)]
+    n = len(segments)
+    filter_inputs = "".join(f"[{i}:v][{i}:a]" for i in range(n))
+    filter_complex = f"{filter_inputs}concat=n={n}:v=1:a=1[v][a]"
+    result = subprocess.run(
+        ["ffmpeg", "-y"]
+        + inputs
+        + ["-filter_complex", filter_complex,
+           "-map", "[v]", "-map", "[a]",
+           "-c:v", "libx264", "-crf", crf, "-c:a", "aac",
+           str(dest)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg failed: {result.stderr[-200:]}")
+    return True
 
 
 def create_router(state: AppState) -> APIRouter:
@@ -179,142 +309,56 @@ def create_router(state: AppState) -> APIRouter:
         if not clip_path.exists():
             raise HTTPException(404, "Clip not found")
 
-        # Normalise segments: use full clip if none provided
-        segments = req.segments if req and req.segments else []
-        # Determine clip duration from the file (needed to detect full-clip case)
-        probe = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(clip_path)],
-            capture_output=True, text=True,
-        )
-        clip_duration = 0.0
-        try:
-            probe_data = json.loads(probe.stdout)
-            clip_duration = float(probe_data.get("format", {}).get("duration", 0))
-        except Exception:
-            pass
-
-        if not segments:
-            segments = [Segment(start=0.0, end=clip_duration or 9999.0)]
-
-        # Sort and validate
-        segments = sorted(segments, key=lambda s: s.start)
+        # Cheap synchronous probe so segment validation can return 4xx
+        # immediately for obviously bad input, before we spawn a worker.
+        clip_duration = _probe_duration(clip_path)
+        segments = _normalise_segments(req, clip_duration)
         for seg in segments:
             if seg.end - seg.start < 1.0:
                 raise HTTPException(400, f"Segment {seg.start:.1f}-{seg.end:.1f} is too short (min 1s)")
 
-        kept_dir = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem
-        kept_dir.mkdir(parents=True, exist_ok=True)
-        dest = kept_dir / filename
+        custom_name = req.custom_name.strip() if (req and req.custom_name and req.custom_name.strip()) else None
+        quality = req.quality if (req and req.quality in ("copy", "precise", "ultra")) else "copy"
 
-        is_full_clip = (
-            len(segments) == 1
-            and segments[0].start <= 0.1
-            and (clip_duration == 0 or (clip_duration - segments[0].end) <= 0.1)
-        )
+        task_id = state.keep.start(video_stem, filename)
 
-        if is_full_clip:
-            # No re-encode needed
+        def worker() -> None:
             try:
-                shutil.copy2(str(clip_path), str(dest))
-            except OSError:
-                pass
-            trimmed = False
-        elif len(segments) == 1:
-            # Single segment trim — use stream copy to avoid quality loss
-            seg = segments[0]
-            duration = seg.end - seg.start
-            result = subprocess.run(
-                ["ffmpeg", "-y",
-                 "-ss", f"{seg.start:.3f}",
-                 "-i", str(clip_path),
-                 "-t", f"{duration:.3f}",
-                 "-c", "copy",
-                 "-avoid_negative_ts", "make_zero",
-                 str(dest)],
-                capture_output=True, text=True,
-            )
-            if result.returncode != 0:
-                raise HTTPException(500, f"FFmpeg failed: {result.stderr[-200:]}")
-            trimmed = True
-        else:
-            # Multiple segments
-            quality = req.quality if req and req.quality in ("copy", "precise", "ultra") else "copy"
-
-            if quality == "copy":
-                # Two-pass: extract each segment with -c copy, then concat demuxer
-                tmp_dir = Path(tempfile.mkdtemp())
-                try:
-                    seg_files = []
-                    for j, seg in enumerate(segments):
-                        seg_path = tmp_dir / f"seg_{j}.mp4"
-                        result = subprocess.run(
-                            ["ffmpeg", "-y",
-                             "-ss", f"{seg.start:.3f}",
-                             "-t", f"{seg.end - seg.start:.3f}",
-                             "-i", str(clip_path),
-                             "-c", "copy",
-                             "-avoid_negative_ts", "make_zero",
-                             str(seg_path)],
-                            capture_output=True, text=True,
-                        )
-                        if result.returncode != 0:
-                            raise HTTPException(500, f"FFmpeg segment extract failed: {result.stderr[-200:]}")
-                        seg_files.append(seg_path)
-
-                    filelist = tmp_dir / "filelist.txt"
-                    filelist.write_text(
-                        "\n".join(f"file '{p}'" for p in seg_files),
-                        encoding="utf-8",
-                    )
-
-                    result = subprocess.run(
-                        ["ffmpeg", "-y",
-                         "-f", "concat", "-safe", "0",
-                         "-i", str(filelist),
-                         "-c", "copy",
-                         str(dest)],
-                        capture_output=True, text=True,
-                    )
-                    if result.returncode != 0:
-                        raise HTTPException(500, f"FFmpeg concat failed: {result.stderr[-200:]}")
-                finally:
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
-
-            else:
-                # Re-encode with quality setting
-                crf = "16" if quality == "precise" else "0"
-                inputs = []
-                for seg in segments:
-                    inputs += ["-ss", f"{seg.start:.3f}", "-t", f"{seg.end - seg.start:.3f}", "-i", str(clip_path)]
-
-                n = len(segments)
-                filter_inputs = "".join(f"[{i}:v][{i}:a]" for i in range(n))
-                filter_complex = f"{filter_inputs}concat=n={n}:v=1:a=1[v][a]"
-
-                result = subprocess.run(
-                    ["ffmpeg", "-y"]
-                    + inputs
-                    + ["-filter_complex", filter_complex,
-                       "-map", "[v]", "-map", "[a]",
-                       "-c:v", "libx264", "-crf", crf, "-c:a", "aac",
-                       str(dest)],
-                    capture_output=True, text=True,
+                state.keep.update_step(
+                    task_id,
+                    "Trimming…" if len(segments) > 1 else
+                    "Saving clip…" if (
+                        len(segments) == 1
+                        and segments[0].start <= 0.1
+                        and (clip_duration == 0 or (clip_duration - segments[0].end) <= 0.1)
+                    ) else "Trimming…",
                 )
-                if result.returncode != 0:
-                    raise HTTPException(500, f"FFmpeg failed: {result.stderr[-200:]}")
+                trimmed = _do_keep(
+                    output_dir=state.output_dir,
+                    clip_path=clip_path,
+                    video_stem=video_stem,
+                    filename=filename,
+                    segments=segments,
+                    clip_duration=clip_duration,
+                    quality=quality,
+                )
+                state.keep.update_step(task_id, "Updating metadata…")
+                update_clip_status(meta_path, filename, "kept")
+                if trimmed:
+                    new_duration = sum(seg.end - seg.start for seg in segments)
+                    update_clip_duration(meta_path, filename, new_duration)
+                if custom_name:
+                    update_clip_custom_name(meta_path, filename, custom_name)
+                state.keep.finish(task_id, trimmed=trimmed)
+            except Exception as e:
+                state.keep.finish(task_id, error=str(e))
 
-            trimmed = True
+        threading.Thread(target=worker, daemon=True).start()
+        return {"task_id": task_id, "status": "started"}
 
-        update_clip_status(meta_path, filename, "kept")
-
-        if trimmed:
-            new_duration = sum(seg.end - seg.start for seg in segments)
-            update_clip_duration(meta_path, filename, new_duration)
-
-        if req and req.custom_name and req.custom_name.strip():
-            update_clip_custom_name(meta_path, filename, req.custom_name.strip())
-
-        return {"status": "kept", "trimmed": trimmed}
+    @router.get("/api/clips/keep/status")
+    def keep_status():
+        return state.keep.snapshot()
 
     @router.post("/api/clips/{video_stem}/{filename}/discard")
     def discard_clip(video_stem: str, filename: str):

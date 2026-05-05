@@ -119,7 +119,10 @@ tasks.addEventListener('task-complete', (e) => {
       loadExportTab();
       break;
     case 'keep':
-      // Phase 4 will wire this once the backend is async; intentional no-op for now.
+      // Refresh the export tab so kept clips show up there. The review tab
+      // already advanced optimistically and uses local state, so we don't
+      // reload it here — that would lose the user's place in the queue.
+      void loadExportTab();
       break;
   }
 });

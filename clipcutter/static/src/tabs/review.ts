@@ -1,7 +1,8 @@
-import { fetchClips, keepClip, discardClip, fetchSources, deleteSource } from '../api';
+import { fetchClips, keepClip, fetchKeepStatus, discardClip, fetchSources, deleteSource } from '../api';
 import type { ClipInfo } from '../api';
 import { fmtTime, fmtTimePrecise, escapeHtml } from '../utils';
 import { loadWaveform, stopWaveformSync, updateWaveformTrimMarkers, REGION_COLORS, REGION_LABELS } from '../waveform';
+import { tasks } from '../tasks';
 
 interface SegmentEntry {
   start: number;
@@ -335,22 +336,48 @@ export async function clipAction(type: 'keep' | 'skip' | 'discard'): Promise<voi
 
   if (type === 'keep') {
     const customName = (document.getElementById('clipCustomName') as HTMLInputElement)?.value?.trim() || null;
-    const isFullClip = segments.length === 1 && segments[0].start <= 0.1 && (clip.duration - segments[0].end) <= 0.1;
-    showOverlay(isFullClip ? 'Saving clip...' : segments.length > 1 ? 'Cutting segments...' : 'Trimming clip...');
+    const qualitySelect = document.getElementById('trimQuality') as HTMLSelectElement | null;
+    const quality = qualitySelect?.value ?? 'precise';
+    const segs = segments.map(s => ({ start: s.start, end: s.end }));
+
+    let resp: { task_id: string };
     try {
-      const qualitySelect = document.getElementById('trimQuality') as HTMLSelectElement | null;
-      const quality = qualitySelect?.value ?? 'precise';
-      await keepClip(clip.video_stem, clip.filename, {
-        segments: segments.map(s => ({ start: s.start, end: s.end })),
+      resp = await keepClip(clip.video_stem, clip.filename, {
+        segments: segs,
         custom_name: customName,
         quality,
       });
     } catch (e) {
-      hideOverlay();
       alert((e as Error).message || 'Keep failed');
       return;
     }
-    hideOverlay();
+
+    const taskId = resp.task_id;
+    const subtitle = `${customName || clip.filename} · ${segs.length} seg${segs.length === 1 ? '' : 's'} · ${quality}`;
+
+    tasks.start({
+      kind: 'keep',
+      label: 'Trimming clip',
+      subtitle,
+      pollMs: 500,
+      fetchStatus: async () => {
+        const data = await fetchKeepStatus();
+        const t = data.tasks.find(x => x.task_id === taskId);
+        if (!t) {
+          // Task GC'd — backend treats it as finished. Assume done.
+          return { running: false };
+        }
+        return {
+          running: t.status === 'running',
+          subtitle: t.progress_step,
+          error: t.status === 'error' ? (t.error ?? 'Keep failed') : null,
+        };
+      },
+      formatResult: () => subtitle,
+    });
+
+    // Optimistically advance — the queue refresh on task-complete will
+    // reconcile if this clip ends up failing.
     results[currentIndex] = 'kept';
   } else if (type === 'discard') {
     await discardClip(clip.video_stem, clip.filename).catch(() => {});
@@ -364,17 +391,6 @@ export async function clipAction(type: 'keep' | 'skip' | 'discard'): Promise<voi
   while (next < clips.length && results[next] !== null) next++;
   currentIndex = next;
   showClip();
-}
-
-function showOverlay(text: string): void {
-  const el = document.getElementById('overlayText');
-  const overlay = document.getElementById('overlay');
-  if (el) el.textContent = text;
-  if (overlay) overlay.classList.add('active');
-}
-
-function hideOverlay(): void {
-  document.getElementById('overlay')?.classList.remove('active');
 }
 
 async function showDone(): Promise<void> {

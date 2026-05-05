@@ -4,15 +4,13 @@ import json
 import time
 from pathlib import Path
 
-from tests.conftest import create_pending_clip, save_test_metadata
+from tests.conftest import create_pending_clip, save_test_metadata, keep_and_wait
 
 
 def _keep_clip(app_client, stem, filename):
     """Helper: keep a pending clip so it's available for compilation."""
-    app_client.post(
-        f"/api/clips/{stem}/{filename}/keep",
-        json={"trim_start": 0.0, "trim_end": 0.0},
-    )
+    keep_and_wait(app_client, stem, filename,
+                  json_body={"trim_start": 0.0, "trim_end": 0.0})
 
 
 def _setup_kept_clips(output_dir, app_client, stem, count=3):
