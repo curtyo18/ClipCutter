@@ -38,44 +38,80 @@
     </div>
     <div class="cc-toast-wrap" id="toastWrap"></div>
 
-    <div class="main">
-      <div class="view active" id="view-process">
-        <div class="form-section">
-          <h2>Process Videos</h2>
-          <div class="form-row">
-            <div class="form-group wide">
-              <label>Video folder</label>
-              <input type="text" id="folderPath" placeholder="C:\path\to\videos" />
-            </div>
-            <div class="form-group">
-              <label>Sensitivity</label>
-              <input type="number" id="sensitivity" value="1.0" min="0.1" max="5.0" step="0.1" />
-            </div>
-            <div class="form-group">
-              <label>Context (s)</label>
-              <input type="number" id="context" placeholder="20" min="0" step="1" />
-            </div>
-            <button class="btn-scan" id="btnScan" onclick="window._cc.scanFolderHandler()">Scan</button>
-            <button class="btn-process" id="btnProcess" onclick="window._cc.startProcessingHandler()">Process</button>
+    <div class="view active" id="view-process">
+      <div class="cc-process">
+        <div class="cc-process-head">
+          <div class="cc-folder-bar">
+            <span class="cc-dim" aria-hidden="true">📁</span>
+            <input type="text" id="folderPath" placeholder="C:\path\to\videos"
+                   style="background:transparent;border:0;color:var(--cc-fg);font-family:var(--cc-mono);font-size:var(--cc-fs-sm);outline:none;flex:1;min-width:0">
+            <button class="cc-btn" data-variant="ghost" data-size="sm" id="btnScan" onclick="window._cc.scanFolderHandler()">Scan</button>
+          </div>
+          <div class="cc-stat-grid" id="folderStats" style="flex:0 0 380px;display:none">
+            <div class="cc-stat"><div class="cc-stat-num" id="statUnprocessed">0</div><div class="cc-stat-lbl">unprocessed</div></div>
+            <div class="cc-stat"><div class="cc-stat-num" id="statPending">0</div><div class="cc-stat-lbl">pending review</div></div>
+            <div class="cc-stat"><div class="cc-stat-num" id="statProcessed">0</div><div class="cc-stat-lbl">processed</div></div>
           </div>
         </div>
-        <div id="folderScanPanel" style="display:none">
-          <div class="scan-panel" id="videosInFolderSection"></div>
-          <div class="scan-panel" id="staleCandidatesSection" style="border-color:#2d1111"></div>
-        </div>
-        <div class="log-box" id="logBox"></div>
-      </div>
 
-      <div class="view" id="view-review">
-        <div id="reviewContent">
-          <div class="empty-state">No pending clips. Process some videos first.</div>
+        <div class="cc-process-main cc-panel">
+          <div class="cc-panel-head">
+            <span id="folderPanelTitle">Folder</span>
+            <span class="cc-spacer" style="flex:1"></span>
+            <button class="cc-btn" data-variant="ghost" data-size="sm" onclick="window._cc.scanFolderHandler()">↻ Rescan</button>
+          </div>
+          <div class="cc-panel-body" id="videosInFolderSection">
+            <div style="padding:24px;text-align:center;color:var(--cc-fg-dim);font-size:var(--cc-fs-sm)">Pick a folder and click Scan.</div>
+          </div>
+          <div id="staleCandidatesSection" style="display:none"></div>
+        </div>
+
+        <div class="cc-process-side">
+          <div class="cc-controls">
+            <div class="cc-h">Detection</div>
+            <div class="cc-control-row">
+              <span class="cc-label">Sensitivity</span>
+              <input type="range" class="cc-slider" id="sensitivity" min="0.1" max="5" step="0.1" value="1.0">
+              <span class="cc-num" id="sensitivityVal">1.0</span>
+            </div>
+            <div class="cc-control-row">
+              <span class="cc-label">Context</span>
+              <input type="range" class="cc-slider" id="context" min="2" max="60" step="1" value="20">
+              <span class="cc-num" id="contextVal">20s</span>
+            </div>
+            <div class="cc-control-row">
+              <span class="cc-label">Stale after</span>
+              <input type="range" class="cc-slider" id="staleThreshold" min="7" max="180" step="1" value="30">
+              <span class="cc-num" id="staleThresholdVal">30d</span>
+            </div>
+            <button class="cc-btn" data-variant="primary" id="btnProcess"
+                    style="height:calc(var(--cc-row-h) + 6px);margin-top:4px"
+                    onclick="window._cc.startProcessingHandler()">▶ Process folder</button>
+          </div>
+
+          <div class="cc-panel" style="flex:1;min-height:0">
+            <div class="cc-panel-head">
+              <span>Last run</span>
+              <span class="cc-spacer" style="flex:1"></span>
+              <span class="cc-mono cc-dim" id="logElapsed" style="font-size:var(--cc-fs-xs);text-transform:none;letter-spacing:0"></span>
+            </div>
+            <div class="cc-panel-body" style="padding:var(--cc-pad)">
+              <div class="cc-log" id="logBox"></div>
+            </div>
+          </div>
         </div>
       </div>
+    </div>
 
-      <div class="view" id="view-export">
-        <div id="exportContent">
-          <div class="empty-state">Loading export data...</div>
-        </div>
+    <div class="view" id="view-review">
+      <div id="reviewContent">
+        <div class="empty-state">No pending clips. Process some videos first.</div>
+      </div>
+    </div>
+
+    <div class="view" id="view-export">
+      <div id="exportContent">
+        <div class="empty-state">Loading export data...</div>
       </div>
     </div>
   </div>

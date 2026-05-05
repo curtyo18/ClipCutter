@@ -1084,21 +1084,35 @@
 }
 
 /* ============================================================
-   Phase 1 transitional overrides
-   Lets the existing tab-body content (still using legacy CSS
-   from index.html's <style> block) live inside the new shell.
-   To be removed when per-tab refactors land in Phase 3.
+   Tab view layout
+   Each .view is a direct child of .cc-body. The active one
+   becomes a flex column that fills the body. Tabs that have
+   already been redesigned (Process) self-manage their internal
+   layout via .cc-process, .cc-review, etc.; tabs still on the
+   legacy markup get a centered max-width scroll container.
    ============================================================ */
-.cc-body > .main {
+.cc-body > .view {
+  display: none;
+  min-height: 0;
+}
+.cc-body > .view.active {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
+}
+
+/* Legacy tabs (Review, Export) — restored centered scroll behavior
+   until their Phase 3 redesigns land. */
+.cc-body > #view-review.active,
+.cc-body > #view-export.active {
   overflow-y: auto;
-  max-width: none;
-  width: 100%;
   padding: 24px;
 }
-.cc-body > .main > .view {
+.cc-body > #view-review.active > #reviewContent,
+.cc-body > #view-export.active > #exportContent {
   max-width: 960px;
   margin: 0 auto;
+  width: 100%;
 }
 
