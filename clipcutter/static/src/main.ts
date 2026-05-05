@@ -1,6 +1,8 @@
 import './styles/legacy.css';
 import './styles/cc.css';
-import { initProcessTab, startProcessingHandler, scanFolderHandler, thresholdChangedHandler, deleteFileHandler } from './tabs/process';
+import { initTaskUI, tasks } from './tasks';
+import type { Task } from './tasks';
+import { initProcessTab, startProcessingHandler, scanFolderHandler, thresholdChangedHandler, deleteFileHandler, scanCurrentFolder } from './tabs/process';
 import { loadClips, clipAction, addSegment, removeSegment, focusSegment, setSegmentPoint, seekToSegment, onSegmentInput, updateTrimIndicator, stopWaveformSync, deleteSourceHandler } from './tabs/review';
 import { loadExportTab, renderExportView, toggleAllClips, startEncodingHandler, cancelEncodingHandler, startYouTubeAuthHandler, revokeYouTubeAuthHandler, startUploadHandler, cancelUploadHandler, keptClips, deleteKeptClipHandler, openFolderHandler, previewClip, deleteEncodedClipHandler, deleteSourceFromExportHandler } from './tabs/encode';
 import { addSelectedToCompilation, renderCompilationList, removeCompClip, updateCompDuration, startCompilationHandler, cancelCompilationHandler, loadPastCompilations, deleteCompilationHandler, deleteCompilationSourcesHandler } from './tabs/compile';
@@ -105,7 +107,28 @@ document.addEventListener('input', (e: Event) => {
 });
 
 // App init
+initTaskUI();
 initProcessTab();
+
+// Cross-tab refetch hooks: when a task finishes, refresh the data it touched.
+// Per the design handover, each tab subscribes; tab loaders are idempotent
+// so calling them while the user is on another tab is harmless.
+tasks.addEventListener('task-complete', (e) => {
+  const t = (e as CustomEvent).detail.task as Task;
+  switch (t.kind) {
+    case 'process':
+      scanCurrentFolder();
+      break;
+    case 'encode':
+    case 'compile':
+    case 'upload':
+      loadExportTab();
+      break;
+    case 'keep':
+      // Phase 4 will wire this once the backend is async; intentional no-op for now.
+      break;
+  }
+});
 
 // Helper: get active segment index from the focused segment row
 function activeSegmentIndex(): number {

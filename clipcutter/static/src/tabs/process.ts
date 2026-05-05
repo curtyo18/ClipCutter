@@ -1,7 +1,7 @@
 import { fetchDefaults, startProcessing, fetchProcessStatus, fetchFolderScan, deleteFolderFile, VideoEntry, FolderScanResult } from '../api';
 import { escapeHtml } from '../utils';
+import { tasks } from '../tasks';
 
-let pollTimer: ReturnType<typeof setInterval> | null = null;
 let lastScanResult: FolderScanResult | null = null;
 let lastScanFolder = '';
 
@@ -154,6 +154,11 @@ export async function startProcessingHandler(): Promise<void> {
   const folder = folderInput?.value.trim() ?? '';
   if (!folder) { alert('Enter a folder path.'); return; }
 
+  if (tasks.isRunning('process')) {
+    alert('A processing task is already running.');
+    return;
+  }
+
   const sensitivity = parseFloat((document.getElementById('sensitivity') as HTMLInputElement).value) || 1.0;
   const ctxVal = (document.getElementById('context') as HTMLInputElement).value.trim();
   const context = ctxVal ? parseFloat(ctxVal) : null;
@@ -166,39 +171,71 @@ export async function startProcessingHandler(): Promise<void> {
 
   try {
     await startProcessing({ folder, sensitivity, context });
-    pollTimer = setInterval(pollStatus, 800);
   } catch (e) {
     alert('Error: ' + (e as Error).message);
     btn.disabled = false;
     btn.textContent = 'Process';
+    return;
   }
+
+  let loggedCount = 0;
+  tasks.start({
+    kind: 'process',
+    label: 'Processing folder',
+    subtitle: folder,
+    pollMs: 800,
+    fetchStatus: async () => {
+      const s = await fetchProcessStatus();
+      const newLines = s.log.slice(loggedCount);
+      loggedCount = s.log.length;
+      // Mirror the log into the legacy logBox so the Process tab's
+      // behaviour is preserved when the modal is dismissed.
+      if (newLines.length) {
+        const box = document.getElementById('logBox');
+        if (box) {
+          for (const line of newLines) {
+            const div = document.createElement('div');
+            div.className = 'log-line';
+            div.textContent = line;
+            box.appendChild(div);
+          }
+          box.scrollTop = box.scrollHeight;
+        }
+      }
+      return {
+        running: s.running,
+        newLogLines: newLines,
+        subtitle: s.log[s.log.length - 1] ?? folder,
+        error: s.error,
+      };
+    },
+    formatResult: (t) => `${t.log.length} log line${t.log.length === 1 ? '' : 's'}`,
+  });
 }
 
-async function pollStatus(): Promise<void> {
-  try {
-    const data = await fetchProcessStatus();
-    const box = document.getElementById('logBox')!;
-    box.innerHTML = data.log.map(line => `<div class="log-line">${escapeHtml(line)}</div>`).join('');
+// Subscribe once to flip the legacy Process button back when the
+// process task finishes (regardless of whether the modal is open).
+tasks.addEventListener('task-complete', (e) => {
+  const t = (e as CustomEvent).detail.task;
+  if (t.kind !== 'process') return;
+  const btn = document.getElementById('btnProcess') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = false; btn.textContent = 'Process'; }
+  const box = document.getElementById('logBox');
+  if (box) {
+    const div = document.createElement('div');
+    div.className = t.error ? 'log-line log-error' : 'log-line log-done';
+    div.textContent = t.error
+      ? 'Error: ' + t.error
+      : 'Done! Switch to Review tab to review clips.';
+    box.appendChild(div);
     box.scrollTop = box.scrollHeight;
+  }
+});
 
-    if (!data.running) {
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-      const btn = document.getElementById('btnProcess') as HTMLButtonElement;
-      btn.disabled = false;
-      btn.textContent = 'Process';
-
-      if (data.error) {
-        box.innerHTML += `<div class="log-line log-error">Error: ${escapeHtml(data.error)}</div>`;
-      } else {
-        box.innerHTML += `<div class="log-line log-done">Done! Switch to Review tab to review clips.</div>`;
-        // Re-scan after processing completes so statuses update
-        const folder = (document.getElementById('folderPath') as HTMLInputElement)?.value.trim();
-        if (folder) await scanFolder(folder);
-      }
-      box.scrollTop = box.scrollHeight;
-    }
-  } catch (e) {
-    console.error('Poll error:', e);
+/** Re-scan whatever folder was last scanned. Used by the task-complete hook. */
+export function scanCurrentFolder(): void {
+  if (lastScanFolder) {
+    void scanFolder(lastScanFolder);
   }
 }
 

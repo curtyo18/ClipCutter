@@ -6,6 +6,7 @@ import {
 } from '../api';
 import type { KeptClipInfo, Playlist, StorageSummary, SourceVideo } from '../api';
 import { escapeHtml, fmtTime, formatClipTitle } from '../utils';
+import { tasks } from '../tasks';
 
 export let keptClips: KeptClipInfo[] = [];
 let encodingPresets: Array<{ name: string; display_name: string; extension: string }> = [];
@@ -15,8 +16,6 @@ let ytAuthenticated = false;
 let ytChannelName = '';
 let ytPlaylists: Playlist[] = [];
 
-let encodingPoll: ReturnType<typeof setInterval> | null = null;
-let uploadPoll: ReturnType<typeof setInterval> | null = null;
 let storageSummary: StorageSummary | null = null;
 let sourcesData: SourceVideo[] = [];
 
@@ -300,6 +299,7 @@ export function toggleAllClips(section: 'encode' | 'upload'): void {
 export async function startEncodingHandler(): Promise<void> {
   const checkboxes = Array.from(document.querySelectorAll<HTMLInputElement>('.encode-cb:checked'));
   if (!checkboxes.length) { alert('Select at least one clip to encode.'); return; }
+  if (tasks.isRunning('encode')) { alert('An encode task is already running.'); return; }
 
   const preset = (document.getElementById('encodePreset') as HTMLSelectElement).value;
   const fpsVal = (document.getElementById('encodeFps') as HTMLSelectElement).value;
@@ -319,43 +319,58 @@ export async function startEncodingHandler(): Promise<void> {
 
   try {
     await startEncoding({ clips: clipsToEncode, preset, target_fps: fps, slowdown_factor: slowdown });
-    document.getElementById('encodeProgress')!.style.display = 'block';
-    encodingPoll = setInterval(pollEncodingStatus, 800);
   } catch (e) {
     alert((e as Error).message);
     btn.disabled = false;
     btn.textContent = 'Encode Selected';
+    return;
   }
-}
 
-async function pollEncodingStatus(): Promise<void> {
-  try {
-    const data = await fetchEncodeStatus();
-    const label = document.getElementById('encodeProgressLabel');
-    const fill = document.getElementById('encodeProgressFill');
-    if (data.total > 0) {
-      const pct = Math.round(((data.completed || []).length / data.total) * 100);
+  document.getElementById('encodeProgress')!.style.display = 'block';
+
+  tasks.start({
+    kind: 'encode',
+    label: 'Encoding clips',
+    subtitle: `${clipsToEncode.length} clip${clipsToEncode.length === 1 ? '' : 's'} · ${preset}`,
+    pollMs: 800,
+    cancel: cancelEncoding,
+    fetchStatus: async () => {
+      const data = await fetchEncodeStatus();
+      const label = document.getElementById('encodeProgressLabel');
+      const fill = document.getElementById('encodeProgressFill');
+      const completedCount = (data.completed || []).length;
+      const pct = data.total > 0 ? Math.round((completedCount / data.total) * 100) : 0;
+      const subtitle = data.current_file
+        ? `clip ${data.current_index || 0} of ${data.total}: ${data.current_file}`
+        : `${completedCount} / ${data.total}`;
       if (label) label.textContent = `Encoding clip ${data.current_index || 0} of ${data.total}: ${data.current_file || ''}`;
       if (fill) fill.style.width = pct + '%';
-    }
-    if (!data.running) {
-      if (encodingPoll) { clearInterval(encodingPoll); encodingPoll = null; }
-      const btn = document.getElementById('btnEncode') as HTMLButtonElement;
-      btn.disabled = false;
-      btn.textContent = 'Encode Selected';
-      if (fill) fill.style.width = '100%';
-      if (label) {
-        label.textContent = data.errors?.length
-          ? `Done with ${data.errors.length} error(s). ${(data.completed || []).length} clip(s) encoded.`
-          : `Encoding complete! ${(data.completed || []).length} clip(s) encoded.`;
-      }
-      await loadExportTab();
-    }
-  } catch (e) { console.error('Encoding poll error:', e); }
+      const error = !data.running && data.errors?.length
+        ? `${data.errors.length} error(s) — ${data.errors[0].error}`
+        : null;
+      return { running: data.running, pct, subtitle, error };
+    },
+    formatResult: (t) => t.subtitle ?? '',
+  });
 }
 
+// Restore the legacy Encode-tab UI when the encode task finishes.
+tasks.addEventListener('task-complete', (e) => {
+  const t = (e as CustomEvent).detail.task;
+  if (t.kind !== 'encode') return;
+  const btn = document.getElementById('btnEncode') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = false; btn.textContent = 'Encode Selected'; }
+  const fill = document.getElementById('encodeProgressFill');
+  if (fill) fill.style.width = '100%';
+});
+
 export async function cancelEncodingHandler(): Promise<void> {
-  await cancelEncoding().catch(console.error);
+  const running = tasks.getAll().find(x => x.kind === 'encode' && x.state === 'running');
+  if (running) {
+    await tasks.cancel(running.id);
+  } else {
+    await cancelEncoding().catch(console.error);
+  }
 }
 
 export async function startYouTubeAuthHandler(): Promise<void> {
@@ -388,11 +403,12 @@ export async function revokeYouTubeAuthHandler(): Promise<void> {
 export async function startUploadHandler(): Promise<void> {
   const checkboxes = Array.from(document.querySelectorAll<HTMLInputElement>('.upload-cb:checked'));
   if (!checkboxes.length) { alert('Select at least one clip to upload.'); return; }
+  if (tasks.isRunning('upload')) { alert('An upload task is already running.'); return; }
 
   const privacy = (document.getElementById('ytPrivacy') as HTMLSelectElement).value;
   const playlistId = (document.getElementById('ytPlaylist') as HTMLSelectElement).value;
   const categoryId = (document.getElementById('ytCategory') as HTMLSelectElement).value;
-  const tags = (document.getElementById('ytTags') as HTMLInputElement).value.trim();
+  const tagsRaw = (document.getElementById('ytTags') as HTMLInputElement).value.trim();
   const descTemplate = (document.getElementById('ytDescription') as HTMLTextAreaElement).value;
 
   const clipsToUpload = checkboxes.map(cb => {
@@ -409,7 +425,7 @@ export async function startUploadHandler(): Promise<void> {
     return {
       video_stem: clip.video_stem, filename: clip.filename,
       use_encoded: !!clip.encoded_exists, title, description,
-      tags: tags ? tags.split(',').map(t => t.trim()).filter(t => t) : [],
+      tags: tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(t => t) : [],
       category_id: categoryId, privacy, playlist_id: playlistId || null,
     };
   });
@@ -418,49 +434,85 @@ export async function startUploadHandler(): Promise<void> {
   btn.disabled = true; btn.textContent = 'Uploading...';
   try {
     await startUpload({ clips: clipsToUpload });
-    document.getElementById('uploadProgress')!.style.display = 'block';
-    uploadPoll = setInterval(pollUploadStatus, 1000);
-  } catch (e) { alert((e as Error).message); btn.disabled = false; btn.textContent = 'Upload Selected'; }
-}
+  } catch (e) {
+    alert((e as Error).message);
+    btn.disabled = false;
+    btn.textContent = 'Upload Selected';
+    return;
+  }
 
-async function pollUploadStatus(): Promise<void> {
-  try {
-    const data = await fetchUploadStatus();
-    const label = document.getElementById('uploadProgressLabel');
-    const fill = document.getElementById('uploadProgressFill');
-    if (data.total > 0) {
+  document.getElementById('uploadProgress')!.style.display = 'block';
+  let lastCompletedCount = 0;
+
+  tasks.start({
+    kind: 'upload',
+    label: 'Uploading to YouTube',
+    subtitle: `${clipsToUpload.length} clip${clipsToUpload.length === 1 ? '' : 's'}`,
+    pollMs: 1000,
+    cancel: cancelUpload,
+    fetchStatus: async () => {
+      const data = await fetchUploadStatus();
+      const label = document.getElementById('uploadProgressLabel');
+      const fill = document.getElementById('uploadProgressFill');
+
       const filePct = data.bytes_total > 0 ? Math.round((data.bytes_sent / data.bytes_total) * 100) : 0;
       const completedClips = (data.completed || []).length;
-      const overallPct = Math.round(((completedClips + filePct / 100) / data.total) * 100);
+      const overallPct = data.total > 0
+        ? Math.round(((completedClips + filePct / 100) / data.total) * 100)
+        : 0;
+
       if (label) label.textContent = `Uploading clip ${data.current_index || 0} of ${data.total}: ${data.current_file || ''} (${filePct}%)`;
       if (fill) fill.style.width = overallPct + '%';
-    }
-    if (data.completed) {
-      for (const c of data.completed) {
+
+      // Splice newly-completed uploads into the per-clip list as links
+      const newLines: string[] = [];
+      const completed = data.completed || [];
+      for (let i = lastCompletedCount; i < completed.length; i++) {
+        const c = completed[i];
         const idx = keptClips.findIndex(k => k.filename === c.filename);
         if (idx >= 0) {
           const row = document.getElementById('upload-row-' + idx);
           const badge = row?.querySelector('.badge, .upload-link');
           if (badge) badge.outerHTML = `<a class="upload-link" href="${escapeHtml(c.url)}" target="_blank">Uploaded</a>`;
         }
+        newLines.push(`✓ ${c.filename}`);
       }
-    }
-    if (!data.running) {
-      if (uploadPoll) { clearInterval(uploadPoll); uploadPoll = null; }
-      const btn = document.getElementById('btnUpload') as HTMLButtonElement;
-      btn.disabled = false; btn.textContent = 'Upload Selected';
-      if (fill) fill.style.width = '100%';
-      if (label) {
-        label.textContent = data.errors?.length
-          ? `Done with ${data.errors.length} error(s). ${(data.completed || []).length} clip(s) uploaded.`
-          : `Upload complete! ${(data.completed || []).length} clip(s) uploaded.`;
-      }
-    }
-  } catch (e) { console.error('Upload poll error:', e); }
+      lastCompletedCount = completed.length;
+
+      const error = !data.running && data.errors?.length
+        ? `${data.errors.length} error(s) — ${data.errors[0].error}`
+        : null;
+
+      return {
+        running: data.running,
+        pct: overallPct,
+        subtitle: data.current_file
+          ? `${data.current_index || 0} / ${data.total} · ${data.current_file} (${filePct}%)`
+          : `${completedClips} / ${data.total}`,
+        newLogLines: newLines,
+        error,
+      };
+    },
+    formatResult: (t) => t.subtitle ?? '',
+  });
 }
 
+tasks.addEventListener('task-complete', (e) => {
+  const t = (e as CustomEvent).detail.task;
+  if (t.kind !== 'upload') return;
+  const btn = document.getElementById('btnUpload') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = false; btn.textContent = 'Upload Selected'; }
+  const fill = document.getElementById('uploadProgressFill');
+  if (fill) fill.style.width = '100%';
+});
+
 export async function cancelUploadHandler(): Promise<void> {
-  await cancelUpload().catch(console.error);
+  const running = tasks.getAll().find(x => x.kind === 'upload' && x.state === 'running');
+  if (running) {
+    await tasks.cancel(running.id);
+  } else {
+    await cancelUpload().catch(console.error);
+  }
 }
 
 async function createPlaylistHandler(): Promise<void> {

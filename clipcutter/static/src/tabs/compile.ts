@@ -1,6 +1,7 @@
 import { startCompilation, fetchCompilationStatus, cancelCompilation, fetchCompilations, deleteCompilation, deleteCompilationSources } from '../api';
 import type { KeptClipInfo } from '../api';
 import { escapeHtml } from '../utils';
+import { tasks } from '../tasks';
 
 interface CompilationClip {
   video_stem: string;
@@ -10,7 +11,6 @@ interface CompilationClip {
 }
 
 let compilationClips: CompilationClip[] = [];
-let compilationPoll: ReturnType<typeof setInterval> | null = null;
 
 export function addSelectedToCompilation(keptClips: KeptClipInfo[]): void {
   const checkboxes = Array.from(document.querySelectorAll<HTMLInputElement>('.encode-cb:checked'));
@@ -110,6 +110,7 @@ export function updateCompDuration(): void {
 
 export async function startCompilationHandler(): Promise<void> {
   if (compilationClips.length < 2) { alert('Add at least 2 clips.'); return; }
+  if (tasks.isRunning('compile')) { alert('A compilation is already being built.'); return; }
 
   const transition = (document.getElementById('compTransition') as HTMLSelectElement)?.value || 'cut';
   const xfadeDur = parseFloat((document.getElementById('compXfadeDur') as HTMLInputElement)?.value || '0.5');
@@ -123,41 +124,59 @@ export async function startCompilationHandler(): Promise<void> {
       clips: compilationClips.map(c => ({ video_stem: c.video_stem, filename: c.filename })),
       transition, crossfade_duration: xfadeDur, title,
     });
-    document.getElementById('compProgress')!.style.display = 'block';
-    compilationPoll = setInterval(pollCompilationStatus, 1000);
   } catch (e) {
     alert((e as Error).message);
     btn.disabled = false; btn.textContent = 'Build';
+    return;
   }
+
+  document.getElementById('compProgress')!.style.display = 'block';
+  const clipsForLabel = compilationClips.length;
+
+  tasks.start({
+    kind: 'compile',
+    label: 'Building compilation',
+    subtitle: `${clipsForLabel} clips · ${transition}`,
+    pollMs: 1000,
+    cancel: cancelCompilation,
+    fetchStatus: async () => {
+      const data = await fetchCompilationStatus();
+      const label = document.getElementById('compProgressLabel');
+      const fill = document.getElementById('compProgressFill');
+      if (label) label.textContent = data.current_step || 'Building...';
+      if (fill) fill.style.width = data.progress_pct + '%';
+      return {
+        running: data.running,
+        pct: data.progress_pct,
+        subtitle: data.current_step || `${clipsForLabel} clips`,
+        error: data.error || null,
+      };
+    },
+    formatResult: (t) => t.subtitle ?? `${clipsForLabel} clips`,
+  });
 }
 
-async function pollCompilationStatus(): Promise<void> {
-  try {
-    const data = await fetchCompilationStatus();
-    const label = document.getElementById('compProgressLabel');
-    const fill = document.getElementById('compProgressFill');
-    if (label) label.textContent = data.current_step || 'Building...';
-    if (fill) fill.style.width = data.progress_pct + '%';
-
-    if (!data.running) {
-      if (compilationPoll) { clearInterval(compilationPoll); compilationPoll = null; }
-      const btn = document.getElementById('btnBuildComp') as HTMLButtonElement | null;
-      if (btn) { btn.disabled = false; btn.textContent = 'Build'; }
-      if (fill) fill.style.width = '100%';
-      if (data.error) {
-        if (label) label.textContent = 'Error: ' + data.error;
-      } else {
-        if (label) label.textContent = 'Compilation complete! ' + (data.output_filename || '');
-        compilationClips = [];
-        renderCompilationList();
-      }
-      loadPastCompilations();
-    }
-  } catch (e) { console.error('Compilation poll error:', e); }
-}
+tasks.addEventListener('task-complete', (e) => {
+  const t = (e as CustomEvent).detail.task;
+  if (t.kind !== 'compile') return;
+  const btn = document.getElementById('btnBuildComp') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = false; btn.textContent = 'Build'; }
+  const fill = document.getElementById('compProgressFill');
+  if (fill) fill.style.width = '100%';
+  if (!t.error) {
+    compilationClips = [];
+    renderCompilationList();
+  }
+  void loadPastCompilations();
+});
 
 export async function cancelCompilationHandler(): Promise<void> {
-  await cancelCompilation().catch(() => {});
+  const running = tasks.getAll().find(x => x.kind === 'compile' && x.state === 'running');
+  if (running) {
+    await tasks.cancel(running.id);
+  } else {
+    await cancelCompilation().catch(() => {});
+  }
 }
 
 export async function deleteCompilationSourcesHandler(compId: string, clipCount: number): Promise<void> {
