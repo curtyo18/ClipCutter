@@ -87,7 +87,7 @@ export async function loadExportTab(): Promise<void> {
   renderExportView();
 }
 
-export function renderExportView(): void {
+function renderExportView(): void {
   renderStorageBar();
   renderSubtabsState();
   renderActiveSubtab();

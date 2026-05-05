@@ -16,7 +16,7 @@ import pytest
 import uvicorn
 
 from clipcutter.web import create_app
-from tests.conftest import create_pending_clip, save_test_metadata
+from tests.conftest import create_pending_clip, save_test_metadata, keep_and_wait
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -162,13 +162,14 @@ class TestReviewTabBrowser:
         page.wait_for_timeout(500)
 
         # Should show the clip with Keep/Skip/Discard buttons
-        assert page.locator(".btn-keep").is_visible()
-        assert page.locator(".btn-skip").is_visible()
-        assert page.locator(".btn-discard").is_visible()
+        assert page.locator(".cc-action-keep").is_visible()
+        assert page.locator(".cc-action-skip").is_visible()
+        assert page.locator(".cc-action-discard").is_visible()
 
-        # Should show detection info
-        text = page.locator("#reviewContent").inner_text()
-        assert "volume spike" in text.lower() or "Confidence" in text
+        # Should show detection info (region label is "volume" + "% confidence")
+        text = page.locator("#reviewContent").inner_text().lower()
+        assert "volume" in text
+        assert "confidence" in text
 
     def test_keep_clip_via_button(self, browser_page):
         page, url, output_dir = browser_page
@@ -188,17 +189,18 @@ class TestReviewTabBrowser:
         page.fill("#clipCustomName", "My Browser Clip")
 
         # Click Keep
-        page.click(".btn-keep")
+        page.click(".cc-action-keep")
         page.wait_for_timeout(500)
 
         # Should show "Review Complete" since there was only 1 clip
         text = page.locator("#reviewContent").inner_text()
-        assert "Review Complete" in text
+        assert "review complete" in text.lower()
         assert "1 kept" in text
 
-        # Verify file was kept and custom name saved
+        # Verify file was kept and custom name saved (Phase 4 made keep async,
+        # so we may need to wait briefly for the daemon worker to land)
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
-        assert kept_path.exists()
+        _wait_for_path(kept_path, timeout=5)
 
         meta = _load_meta(output_dir, stem)
         assert meta["clips"][0]["status"] == "kept"
@@ -218,11 +220,11 @@ class TestReviewTabBrowser:
         page.click('[data-tab="review"]')
         page.wait_for_timeout(500)
 
-        page.click(".btn-discard")
+        page.click(".cc-action-discard")
         page.wait_for_timeout(500)
 
         text = page.locator("#reviewContent").inner_text()
-        assert "Review Complete" in text
+        assert "review complete" in text.lower()
         assert "1 discarded" in text
 
         meta = _load_meta(output_dir, stem)
@@ -258,10 +260,14 @@ class TestReviewTabBrowser:
         page.wait_for_timeout(500)
 
         text = page.locator("#reviewContent").inner_text()
-        assert "Review Complete" in text
+        assert "review complete" in text.lower()
         assert "1 kept" in text
         assert "1 discarded" in text
         assert "1 skipped" in text
+
+        # Wait for the keep worker (the K shortcut keeps clip 0)
+        kept_path = output_dir / "clips" / "kept" / stem / "clip_000.mp4"
+        _wait_for_path(kept_path, timeout=5)
 
 
 class TestExportTabBrowser:
@@ -278,13 +284,13 @@ class TestExportTabBrowser:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/expvid.mp4")
 
-        # Keep it via API
+        # Keep it via API (wait for the async worker to land before driving the UI)
         from starlette.testclient import TestClient
         app = create_app(output_dir)
         client = TestClient(app)
-        client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
-                    json={"trim_start": 0.0, "trim_end": 0.0,
-                          "custom_name": "Export Test"})
+        keep_and_wait(client, stem, "clip_001.mp4",
+                      json_body={"trim_start": 0.0, "trim_end": 0.0,
+                                 "custom_name": "Export Test"})
 
         page.goto(url)
         page.click('[data-tab="export"]')
@@ -327,11 +333,12 @@ class TestFullBrowserWorkflow:
         page.fill("#folderPath", str(proc_dir))
         page.click("#btnProcess")
 
-        # Wait for processing to complete (watch for "Done!" in log)
+        # Wait for processing to complete (the task-complete handler appends
+        # a "[done]" log tag in the new design)
         page.wait_for_function(
             """() => {
                 const box = document.getElementById('logBox');
-                return box && box.innerHTML.includes('Done!');
+                return box && box.innerHTML.includes('[done]');
             }""",
             timeout=120000,
         )
@@ -340,16 +347,16 @@ class TestFullBrowserWorkflow:
         page.click('[data-tab="review"]')
         page.wait_for_timeout(500)
 
-        assert page.locator(".btn-keep").is_visible(), "Should show a clip to review"
+        assert page.locator(".cc-action-keep").is_visible(), "Should show a clip to review"
 
         # Set custom name and keep
         page.fill("#clipCustomName", "Browser Full Test")
-        page.click(".btn-keep")
+        page.click(".cc-action-keep")
         page.wait_for_timeout(500)
 
         # Should reach "Review Complete"
         text = page.locator("#reviewContent").inner_text()
-        assert "Review Complete" in text
+        assert "review complete" in text.lower()
 
         # 3. Export tab: verify clip in export list
         page.click('[data-tab="export"]')
@@ -358,14 +365,12 @@ class TestFullBrowserWorkflow:
         export_text = page.locator("#view-export").inner_text()
         assert "mixed_10s" in export_text.lower() or "clip_" in export_text.lower()
 
-        # Verify metadata has custom name
+        # Verify metadata has custom name (poll until the async keep worker
+        # finishes — Phase 4 made it asynchronous)
         meta_dir = output_dir / "metadata"
-        meta_files = list(meta_dir.glob("*_clips.json"))
-        assert len(meta_files) >= 1
-        meta = json.loads(meta_files[0].read_text(encoding="utf-8"))
+        meta = _wait_for_keep_with_custom_name(meta_dir, "Browser Full Test")
         kept_clips = [c for c in meta["clips"] if c["status"] == "kept"]
         assert len(kept_clips) >= 1
-        assert kept_clips[0].get("custom_name") == "Browser Full Test"
 
 
 # ---------------------------------------------------------------------------
@@ -375,3 +380,34 @@ class TestFullBrowserWorkflow:
 def _load_meta(output_dir: Path, video_stem: str) -> dict:
     meta_path = output_dir / "metadata" / f"{video_stem}_clips.json"
     return json.loads(meta_path.read_text(encoding="utf-8"))
+
+
+def _wait_for_path(path: Path, timeout: float = 5.0) -> None:
+    """Poll until the given path exists or timeout. Used to wait for the
+    async keep worker (Phase 4) to finish copying a clip into kept/."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"Path {path} did not appear within {timeout}s")
+
+
+def _wait_for_keep_with_custom_name(meta_dir: Path, custom_name: str,
+                                    timeout: float = 10.0) -> dict:
+    """Poll any *_clips.json under meta_dir for a kept clip with the given
+    custom_name. Returns the matching metadata dict."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for meta_file in meta_dir.glob("*_clips.json"):
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                for c in meta.get("clips", []):
+                    if c.get("status") == "kept" and c.get("custom_name") == custom_name:
+                        return meta
+            except (json.JSONDecodeError, OSError):
+                continue
+        time.sleep(0.1)
+    raise AssertionError(
+        f"No kept clip with custom_name='{custom_name}' in {meta_dir} after {timeout}s"
+    )

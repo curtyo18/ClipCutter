@@ -199,7 +199,7 @@ export async function cancelCompilationHandler(): Promise<void> {
 export async function deleteCompilationSourcesHandler(compId: string, clipCount: number): Promise<void> {
   if (!confirm(`Delete the ${clipCount} source clip(s) used in this compilation? This cannot be undone.`)) return;
   try {
-    const data = await deleteCompilationSources(compId) as { deleted_count: number };
+    const data = await deleteCompilationSources(compId);
     alert(`Deleted ${data.deleted_count} clip file(s).`);
     loadPastCompilations();
   } catch (e) {

@@ -5,6 +5,30 @@
    directions; those were reference-only and have been stripped.
    ============================================================ */
 
+/* ---------- Document / body reset ---------- */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100vh; margin: 0; }
+body {
+  font-family: var(--cc-font, "Inter", -apple-system, system-ui, sans-serif);
+  background: #0e0f11;
+  color: #e6e8eb;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Tab show/hide — consumed by main.ts switchTab() */
+.view { display: none; }
+.view.active { display: block; }
+
+/* Generic empty-state used by Review / Export when there's nothing to show */
+.empty-state {
+  text-align: center;
+  padding: 60px 24px;
+  color: var(--cc-fg-dim);
+  font-size: var(--cc-fs-sm);
+}
+
 /* ---------- Common reset inside the app shell ---------- */
 .cc {
   box-sizing: border-box;

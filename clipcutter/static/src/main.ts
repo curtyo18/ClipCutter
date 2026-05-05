@@ -1,11 +1,10 @@
-import './styles/legacy.css';
 import './styles/cc.css';
 import { initTaskUI, tasks } from './tasks';
 import type { Task } from './tasks';
-import { initProcessTab, startProcessingHandler, scanFolderHandler, thresholdChangedHandler, deleteFileHandler, scanCurrentFolder } from './tabs/process';
-import { loadClips, clipAction, addSegment, removeSegment, focusSegment, setSegmentPoint, seekToSegment, onSegmentInput, updateTrimIndicator, stopWaveformSync, deleteSourceHandler, getActiveSegmentIndex } from './tabs/review';
-import { loadExportTab, renderExportView, toggleAllClips, startEncodingHandler, cancelEncodingHandler, startYouTubeAuthHandler, revokeYouTubeAuthHandler, startUploadHandler, cancelUploadHandler, keptClips, deleteKeptClipHandler, openFolderHandler, previewClip, deleteEncodedClipHandler, deleteSourceFromExportHandler } from './tabs/encode';
-import { addSelectedToCompilation, renderCompilationList, removeCompClip, updateCompDuration, startCompilationHandler, cancelCompilationHandler, loadPastCompilations, deleteCompilationHandler, deleteCompilationSourcesHandler } from './tabs/compile';
+import { initProcessTab, startProcessingHandler, scanFolderHandler, deleteFileHandler, scanCurrentFolder } from './tabs/process';
+import { loadClips, clipAction, addSegment, removeSegment, focusSegment, setSegmentPoint, seekToSegment, stopWaveformSync, deleteSourceHandler, getActiveSegmentIndex } from './tabs/review';
+import { loadExportTab, toggleAllClips, startEncodingHandler, cancelEncodingHandler, startYouTubeAuthHandler, revokeYouTubeAuthHandler, startUploadHandler, cancelUploadHandler, keptClips, deleteKeptClipHandler, openFolderHandler, previewClip, deleteEncodedClipHandler, deleteSourceFromExportHandler } from './tabs/encode';
+import { addSelectedToCompilation, removeCompClip, updateCompDuration, startCompilationHandler, cancelCompilationHandler, deleteCompilationHandler, deleteCompilationSourcesHandler } from './tabs/compile';
 
 // Expose handlers to HTML via window._cc (avoids global namespace pollution)
 declare global {
@@ -15,11 +14,13 @@ declare global {
   }
 }
 
+// Handlers exposed to inline onclick / oninput attributes via `window._cc.X(...)`.
+// Each entry is referenced from generated HTML somewhere in the codebase; if you
+// remove an HTML reference, drop the corresponding handler here too.
 const handlers = {
   // Process
   startProcessingHandler,
   scanFolderHandler,
-  thresholdChangedHandler,
   deleteFileHandler,
   // Review
   clipAction,
@@ -28,8 +29,6 @@ const handlers = {
   focusSegment,
   setSegmentPoint,
   seekToSegment,
-  onSegmentInput,
-  updateTrimIndicator,
   deleteSourceHandler,
   // Encode
   toggleAllClips,
@@ -46,12 +45,10 @@ const handlers = {
   deleteSourceFromExportHandler,
   addSelectedToCompilation: () => addSelectedToCompilation(keptClips),
   // Compile
-  renderCompilationList,
   removeCompClip,
   updateCompDuration,
   startCompilationHandler,
   cancelCompilationHandler,
-  loadPastCompilations,
   deleteCompilationHandler,
   deleteCompilationSourcesHandler,
 };

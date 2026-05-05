@@ -275,7 +275,7 @@ export const cancelCompilation = () => apiPost<{ status: string }>('/api/compila
 export const fetchCompilations = () => apiGet<{ compilations: CompilationInfo[] }>('/api/compilations');
 export const deleteCompilation = (compId: string) => apiDelete(`/api/compilation/${compId}`);
 export const deleteCompilationSources = (compId: string) =>
-  apiDelete(`/api/compilation/${compId}/sources`);
+  apiDelete<{ deleted_count: number }>(`/api/compilation/${compId}/sources`);
 
 // ---- YouTube ----
 

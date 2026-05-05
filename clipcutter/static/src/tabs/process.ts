@@ -175,11 +175,6 @@ function renderStaleCandidates(result: FolderScanResult, thresholdDays: number):
     </div>`;
 }
 
-export function thresholdChangedHandler(): void {
-  if (!lastScanResult) return;
-  renderStaleCandidates(lastScanResult, getThreshold());
-}
-
 export async function deleteFileHandler(btn: HTMLButtonElement): Promise<void> {
   const filename = btn.dataset.filename ?? '';
   if (!filename || !lastScanFolder) return;

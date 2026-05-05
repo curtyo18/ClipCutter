@@ -291,13 +291,7 @@ export function seekToSegment(segIdx: number, which: 'in' | 'out'): void {
   player.currentTime = which === 'in' ? segments[segIdx].start : segments[segIdx].end;
 }
 
-export function onSegmentInput(_segIdx: number, _which: 'in' | 'out', _val: string): void {
-  // Kept for backwards compat with main.ts wiring; design no longer exposes
-  // typed time inputs per segment (Phase 3b uses Set IN/Set OUT against the
-  // active segment instead).
-}
-
-export function updateTrimIndicator(): void {
+function updateTrimIndicator(): void {
   const clip = clips[currentIndex];
   if (!clip) return;
   const indicator = document.getElementById('trimIndicator');
