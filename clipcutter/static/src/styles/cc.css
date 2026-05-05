@@ -740,6 +740,14 @@
 }
 .cc-segment-times { color: var(--cc-fg); flex: 1; }
 .cc-segment-dur { color: var(--cc-fg-dim); }
+.cc-segment[data-active="true"] {
+  border-color: var(--cc-accent);
+  background: var(--cc-bg-3);
+}
+.cc-segment[data-active="true"] .cc-segment-num {
+  background: var(--cc-accent);
+  color: #0a0c0f;
+}
 
 /* Review action footer */
 .cc-review-actions {
@@ -1102,17 +1110,28 @@
   min-height: 0;
 }
 
-/* Legacy tabs (Review, Export) — restored centered scroll behavior
+/* Legacy tabs (Export only) — restored centered scroll behavior
    until their Phase 3 redesigns land. */
-.cc-body > #view-review.active,
 .cc-body > #view-export.active {
   overflow-y: auto;
   padding: 24px;
 }
-.cc-body > #view-review.active > #reviewContent,
 .cc-body > #view-export.active > #exportContent {
   max-width: 960px;
   margin: 0 auto;
   width: 100%;
+}
+
+/* Review tab: #reviewContent fills the view as a flex column so the
+   .cc-review grid inside can claim the body. */
+.cc-body > #view-review.active > #reviewContent {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+.cc-body > #view-review.active > #reviewContent > .empty-state {
+  margin: auto;
 }
 

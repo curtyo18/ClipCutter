@@ -1,12 +1,25 @@
+// Waveform — DOM bars + region overlays + single trim rectangle + playhead.
+// Replaced the canvas implementation in Phase 3b so the visual treatment
+// matches the design tokens exactly (region tags, animated playhead, IN/OUT
+// pseudo-labels on the trim rect via .cc-wave-trim CSS).
+
 import type { HighlightRegion, WaveformData } from './api';
 import { fetchWaveform } from './api';
 
-const REGION_COLORS: Record<string, string> = {
-  volume_spike: '#f87171',
-  laughter: '#4ade80',
-  shouting: '#fbbf24',
-  sudden_noise: '#60a5fa',
-  fallback: '#888',
+export const REGION_COLORS: Record<string, string> = {
+  volume_spike: '#6aa0ff',
+  laughter:     '#fbbf24',
+  shouting:     '#ef4444',
+  sudden_noise: '#a78bfa',
+  fallback:     '#888888',
+};
+
+export const REGION_LABELS: Record<string, string> = {
+  volume_spike: 'volume',
+  laughter:     'laughter',
+  shouting:     'shouting',
+  sudden_noise: 'noise',
+  fallback:     'fallback',
 };
 
 let waveformData: WaveformData | null = null;
@@ -33,65 +46,43 @@ export async function loadWaveform(
 }
 
 export function renderWaveform(): void {
-  const canvas = document.getElementById('waveformCanvas') as HTMLCanvasElement | null;
-  if (!canvas || !waveformData) return;
-  const ctx = canvas.getContext('2d')!;
+  const wave = document.getElementById('waveform');
+  if (!wave || !waveformData) return;
+  const { waveform: bars, duration, highlight_regions = [] } = waveformData;
 
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * devicePixelRatio;
-  canvas.height = rect.height * devicePixelRatio;
-  ctx.scale(devicePixelRatio, devicePixelRatio);
-  const w = rect.width;
-  const h = rect.height;
-  ctx.clearRect(0, 0, w, h);
+  const barsHtml = bars.map(v => {
+    const h = Math.max(2, v * 80);
+    return `<span class="cc-wave-bar" style="height:${h}px"></span>`;
+  }).join('');
 
-  const bars = waveformData.waveform;
-  const dur = waveformData.duration;
-  const regions = waveformData.highlight_regions || [];
+  const regionsHtml = (highlight_regions || []).map(r => {
+    const left = (r.offset / duration) * 100;
+    const width = (r.duration / duration) * 100;
+    const color = REGION_COLORS[r.type] || REGION_COLORS.fallback;
+    const label = REGION_LABELS[r.type] || r.type.replace('_', ' ');
+    return `<div class="cc-wave-region" style="left:${left}%;width:${width}%;color:${color}">
+      <div class="cc-wave-region-tag">${label}</div>
+    </div>`;
+  }).join('');
 
-  for (const region of regions) {
-    const x1 = (region.offset / dur) * w;
-    const x2 = ((region.offset + region.duration) / dur) * w;
-    ctx.fillStyle = REGION_COLORS[region.type] || '#fbbf24';
-    ctx.globalAlpha = 0.12;
-    ctx.fillRect(x1, 0, Math.max(x2 - x1, 2), h);
-  }
-  ctx.globalAlpha = 1.0;
-
-  const barWidth = w / bars.length;
-  const gap = Math.max(0.5, barWidth * 0.15);
-  for (let i = 0; i < bars.length; i++) {
-    const val = bars[i];
-    const barH = Math.max(1, val * h * 0.9);
-    const x = i * barWidth;
-    const y = (h - barH) / 2;
-    const barTime = (i / bars.length) * dur;
-    let inRegion = false;
-    for (const region of regions) {
-      if (barTime >= region.offset && barTime <= region.offset + region.duration) {
-        ctx.fillStyle = REGION_COLORS[region.type] || '#fbbf24';
-        inRegion = true;
-        break;
-      }
-    }
-    if (!inRegion) ctx.fillStyle = '#3b82f6';
-    ctx.globalAlpha = 0.85;
-    ctx.fillRect(x + gap / 2, y, barWidth - gap, barH);
-  }
-  ctx.globalAlpha = 1.0;
+  wave.innerHTML = `
+    <div class="cc-wave-bars" id="waveformBars">${barsHtml}</div>
+    ${regionsHtml}
+    <div class="cc-wave-trim" id="waveformTrim" style="display:none;left:0;width:0"></div>
+    <div class="cc-wave-playhead" id="waveformPlayhead" style="left:0"></div>
+  `;
 }
 
 export function startWaveformSync(): void {
   const player = document.getElementById('player') as HTMLVideoElement | null;
   if (!player) return;
-
-  function tick() {
-    const cursor = document.getElementById('waveformCursor');
-    if (cursor && player!.duration) {
-      cursor.style.left = (player!.currentTime / player!.duration) * 100 + '%';
+  const tick = (): void => {
+    const ph = document.getElementById('waveformPlayhead');
+    if (ph && player.duration) {
+      ph.style.left = (player.currentTime / player.duration) * 100 + '%';
     }
     animFrame = requestAnimationFrame(tick);
-  }
+  };
   animFrame = requestAnimationFrame(tick);
 }
 
@@ -103,17 +94,14 @@ export function stopWaveformSync(): void {
 }
 
 export function updateWaveformTrimMarkers(inPct: number, outPct: number, hasTrim: boolean): void {
-  const trimIn = document.getElementById('waveformTrimIn');
-  const trimOut = document.getElementById('waveformTrimOut');
-  if (!trimIn || !trimOut) return;
+  const trim = document.getElementById('waveformTrim');
+  if (!trim) return;
   if (hasTrim) {
-    trimIn.style.display = 'block';
-    trimIn.style.left = inPct + '%';
-    trimOut.style.display = 'block';
-    trimOut.style.left = outPct + '%';
+    trim.style.display = 'block';
+    trim.style.left = inPct + '%';
+    trim.style.width = Math.max(0, outPct - inPct) + '%';
   } else {
-    trimIn.style.display = 'none';
-    trimOut.style.display = 'none';
+    trim.style.display = 'none';
   }
 }
 

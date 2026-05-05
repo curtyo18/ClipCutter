@@ -3,7 +3,7 @@ import './styles/cc.css';
 import { initTaskUI, tasks } from './tasks';
 import type { Task } from './tasks';
 import { initProcessTab, startProcessingHandler, scanFolderHandler, thresholdChangedHandler, deleteFileHandler, scanCurrentFolder } from './tabs/process';
-import { loadClips, clipAction, addSegment, removeSegment, focusSegment, setSegmentPoint, seekToSegment, onSegmentInput, updateTrimIndicator, stopWaveformSync, deleteSourceHandler } from './tabs/review';
+import { loadClips, clipAction, addSegment, removeSegment, focusSegment, setSegmentPoint, seekToSegment, onSegmentInput, updateTrimIndicator, stopWaveformSync, deleteSourceHandler, getActiveSegmentIndex } from './tabs/review';
 import { loadExportTab, renderExportView, toggleAllClips, startEncodingHandler, cancelEncodingHandler, startYouTubeAuthHandler, revokeYouTubeAuthHandler, startUploadHandler, cancelUploadHandler, keptClips, deleteKeptClipHandler, openFolderHandler, previewClip, deleteEncodedClipHandler, deleteSourceFromExportHandler } from './tabs/encode';
 import { addSelectedToCompilation, renderCompilationList, removeCompClip, updateCompDuration, startCompilationHandler, cancelCompilationHandler, loadPastCompilations, deleteCompilationHandler, deleteCompilationSourcesHandler } from './tabs/compile';
 
@@ -89,8 +89,8 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
     case 'k': e.preventDefault(); clipAction('keep'); break;
     case 'd': e.preventDefault(); clipAction('discard'); break;
     case 's': e.preventDefault(); clipAction('skip'); break;
-    case 'i': e.preventDefault(); setSegmentPoint(activeSegmentIndex(), 'in'); break;
-    case 'o': e.preventDefault(); setSegmentPoint(activeSegmentIndex(), 'out'); break;
+    case 'i': e.preventDefault(); setSegmentPoint(getActiveSegmentIndex(), 'in'); break;
+    case 'o': e.preventDefault(); setSegmentPoint(getActiveSegmentIndex(), 'out'); break;
     case 'n': e.preventDefault(); (document.getElementById('clipCustomName') as HTMLInputElement | null)?.focus(); break;
     case ' ':
       e.preventDefault();
@@ -98,12 +98,6 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
       if (player) player.paused ? player.play() : player.pause();
       break;
   }
-});
-
-// Trim indicator on input change
-document.addEventListener('input', (e: Event) => {
-  const target = e.target as HTMLElement;
-  if (target.classList.contains('seg-in') || target.classList.contains('seg-out')) updateTrimIndicator();
 });
 
 // App init
@@ -130,11 +124,3 @@ tasks.addEventListener('task-complete', (e) => {
   }
 });
 
-// Helper: get active segment index from the focused segment row
-function activeSegmentIndex(): number {
-  const rows = document.querySelectorAll<HTMLElement>('.segment-row');
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i].style.outline) return i;
-  }
-  return 0;
-}
