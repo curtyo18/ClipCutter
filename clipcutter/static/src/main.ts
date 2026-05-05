@@ -1,3 +1,5 @@
+import './styles/legacy.css';
+import './styles/cc.css';
 import { initProcessTab, startProcessingHandler, scanFolderHandler, thresholdChangedHandler, deleteFileHandler } from './tabs/process';
 import { loadClips, clipAction, addSegment, removeSegment, focusSegment, setSegmentPoint, seekToSegment, onSegmentInput, updateTrimIndicator, stopWaveformSync, deleteSourceHandler } from './tabs/review';
 import { loadExportTab, renderExportView, toggleAllClips, startEncodingHandler, cancelEncodingHandler, startYouTubeAuthHandler, revokeYouTubeAuthHandler, startUploadHandler, cancelUploadHandler, keptClips, deleteKeptClipHandler, openFolderHandler, previewClip, deleteEncodedClipHandler, deleteSourceFromExportHandler } from './tabs/encode';
@@ -59,9 +61,10 @@ let activeTab = 'process';
 
 function switchTab(tab: string): void {
   activeTab = tab;
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll<HTMLElement>('.cc-tab').forEach(t => { t.dataset.active = 'false'; });
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.querySelector(`.tab[data-tab="${tab}"]`)?.classList.add('active');
+  const target = document.querySelector<HTMLElement>(`.cc-tab[data-tab="${tab}"]`);
+  if (target) target.dataset.active = 'true';
   document.getElementById('view-' + tab)?.classList.add('active');
 
   if (tab !== 'review') stopWaveformSync();
@@ -70,7 +73,7 @@ function switchTab(tab: string): void {
 }
 
 // Tab click handlers
-(document.querySelectorAll('.tab') as NodeListOf<HTMLElement>).forEach(el => {
+(document.querySelectorAll('.cc-tab') as NodeListOf<HTMLElement>).forEach(el => {
   el.addEventListener('click', () => switchTab(el.dataset.tab!));
 });
 
