@@ -110,8 +110,26 @@
     </div>
 
     <div class="view" id="view-export">
-      <div id="exportContent">
-        <div class="empty-state">Loading export data...</div>
+      <div class="cc-export">
+        <div class="cc-storage" id="storageBar">
+          <span class="cc-fg2" style="text-transform:uppercase;letter-spacing:0.1em;font-size:var(--cc-fs-xs)">Storage</span>
+          <div class="cc-storage-bar" id="storageBarFill"></div>
+          <div class="cc-storage-legend" id="storageBarLegend"></div>
+        </div>
+        <div class="cc-subtabs">
+          <button class="cc-subtab" data-active="true" data-subtab="clips" type="button">
+            Clips <span class="cc-subtab-count" id="clipsCount">0</span>
+          </button>
+          <button class="cc-subtab" data-subtab="compilation" type="button">
+            Compilation <span class="cc-subtab-count" id="compCount">0</span>
+          </button>
+          <button class="cc-subtab" data-subtab="youtube" type="button">YouTube</button>
+          <span style="flex:1"></span>
+          <span class="cc-yt-status" id="ytSubtabStatus"></span>
+        </div>
+        <div class="cc-export-body" id="exportContent">
+          <div class="empty-state">Loading export data...</div>
+        </div>
       </div>
     </div>
   </div>

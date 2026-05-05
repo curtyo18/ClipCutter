@@ -31,27 +31,45 @@ export function addSelectedToCompilation(keptClips: KeptClipInfo[]): void {
 }
 
 export function renderCompilationList(): void {
+  updateCompCountBadge();
   const list = document.getElementById('compList');
   if (!list) return;
   if (compilationClips.length === 0) {
-    list.innerHTML = '<div style="padding:16px;text-align:center;color:#555;font-size:13px">Add clips using the checkboxes above</div>';
+    list.innerHTML = `<div style="padding:24px;text-align:center;color:var(--cc-fg-dim);font-size:var(--cc-fs-sm)">Select clips on the Clips sub-tab and click "+ Add selected".</div>`;
     updateCompDuration();
     return;
   }
+  const transition = (document.getElementById('compTransition') as HTMLSelectElement | null)?.value ?? 'cut';
+  const xfadeDur = parseFloat((document.getElementById('compXfadeDur') as HTMLInputElement | null)?.value ?? '0.5');
+  const transLabel = transition === 'crossfade'
+    ? `↔ crossfade · ${xfadeDur.toFixed(2)}s`
+    : '⎯ hard cut';
+
   let html = '';
   for (let i = 0; i < compilationClips.length; i++) {
     const c = compilationClips[i];
-    const dur = c.duration ? Math.round(c.duration) + 's' : '';
-    html += `<div class="comp-item" draggable="true" data-idx="${i}">`;
-    html += `<span class="drag-handle">&#x2630;</span>`;
-    html += `<span class="comp-clip-name" title="${escapeHtml(c.filename)}">${escapeHtml(c.custom_name)}</span>`;
-    html += `<span class="comp-clip-dur">${dur}</span>`;
-    html += `<button class="comp-remove" onclick="window._cc.removeCompClip(${i})">&times;</button>`;
-    html += `</div>`;
+    const dur = c.duration ? `${Math.round(c.duration)}s` : '';
+    html += `
+      <div class="cc-comp-row" draggable="true" data-idx="${i}">
+        <span class="cc-comp-grip" aria-hidden="true">⋮⋮</span>
+        <span class="cc-comp-num">${String(i + 1).padStart(2, '0')}</span>
+        <span class="cc-comp-name" title="${escapeHtml(c.filename)}">${escapeHtml(c.custom_name)}</span>
+        <span class="cc-comp-dur">${dur}</span>
+        <button class="cc-btn" data-variant="danger" data-size="sm" onclick="window._cc.removeCompClip(${i})" title="Remove">×</button>
+      </div>
+    `;
+    if (i < compilationClips.length - 1) {
+      html += `<div class="cc-comp-trans">${transLabel}</div>`;
+    }
   }
   list.innerHTML = html;
   initCompDragDrop();
   updateCompDuration();
+}
+
+function updateCompCountBadge(): void {
+  const el = document.getElementById('compCount');
+  if (el) el.textContent = String(compilationClips.length);
 }
 
 export function removeCompClip(idx: number): void {
@@ -64,7 +82,7 @@ function initCompDragDrop(): void {
   if (!list) return;
   let dragIdx: number | null = null;
 
-  list.querySelectorAll<HTMLElement>('.comp-item').forEach(item => {
+  list.querySelectorAll<HTMLElement>('.cc-comp-row').forEach(item => {
     item.addEventListener('dragstart', (e: DragEvent) => {
       dragIdx = parseInt(item.dataset.idx!);
       item.style.opacity = '0.4';
@@ -105,7 +123,13 @@ export function updateCompDuration(): void {
   total = Math.max(0, total);
   const m = Math.floor(total / 60);
   const s = Math.round(total % 60);
-  summary.textContent = `${compilationClips.length} clips \u2014 Total: ${m}:${String(s).padStart(2, '0')}`;
+  summary.textContent = `${compilationClips.length} clips \u00b7 ${m}:${String(s).padStart(2, '0')} total`;
+
+  // Re-render the list so the transition labels reflect the new transition / xfade duration
+  // (only if a list already exists \u2014 avoids infinite recursion since renderCompilationList
+  // calls updateCompDuration).
+  // Skipped for now: keep the row labels stable; updateCompDuration is called frequently
+  // by oninput handlers and re-rendering each keystroke would lose drag state.
 }
 
 export async function startCompilationHandler(): Promise<void> {
@@ -117,7 +141,7 @@ export async function startCompilationHandler(): Promise<void> {
   const title = (document.getElementById('compTitle') as HTMLInputElement)?.value?.trim() || '';
 
   const btn = document.getElementById('btnBuildComp') as HTMLButtonElement;
-  btn.disabled = true; btn.textContent = 'Building...';
+  btn.disabled = true; btn.textContent = 'Building…';
 
   try {
     await startCompilation({
@@ -126,11 +150,10 @@ export async function startCompilationHandler(): Promise<void> {
     });
   } catch (e) {
     alert((e as Error).message);
-    btn.disabled = false; btn.textContent = 'Build';
+    btn.disabled = false; btn.textContent = 'Build compilation';
     return;
   }
 
-  document.getElementById('compProgress')!.style.display = 'block';
   const clipsForLabel = compilationClips.length;
 
   tasks.start({
@@ -141,10 +164,6 @@ export async function startCompilationHandler(): Promise<void> {
     cancel: cancelCompilation,
     fetchStatus: async () => {
       const data = await fetchCompilationStatus();
-      const label = document.getElementById('compProgressLabel');
-      const fill = document.getElementById('compProgressFill');
-      if (label) label.textContent = data.current_step || 'Building...';
-      if (fill) fill.style.width = data.progress_pct + '%';
       return {
         running: data.running,
         pct: data.progress_pct,
@@ -160,9 +179,7 @@ tasks.addEventListener('task-complete', (e) => {
   const t = (e as CustomEvent).detail.task;
   if (t.kind !== 'compile') return;
   const btn = document.getElementById('btnBuildComp') as HTMLButtonElement | null;
-  if (btn) { btn.disabled = false; btn.textContent = 'Build'; }
-  const fill = document.getElementById('compProgressFill');
-  if (fill) fill.style.width = '100%';
+  if (btn) { btn.disabled = false; btn.textContent = 'Build compilation'; }
   if (!t.error) {
     compilationClips = [];
     renderCompilationList();
@@ -197,19 +214,26 @@ export async function loadPastCompilations(): Promise<void> {
     const data = await fetchCompilations();
     const comps = (data.compilations || []).filter(c => c.file_exists);
     if (comps.length === 0) { container.innerHTML = ''; return; }
-    let html = '<h3 style="font-size:14px;color:#fff;margin:16px 0 8px">Past Compilations</h3>';
-    for (const comp of comps) {
-      const dur = comp.total_duration ? Math.round(comp.total_duration) + 's' : '';
-      html += `<div class="comp-past-item">`;
-      html += `<span class="clip-name" style="flex:1">${escapeHtml(comp.filename)}</span>`;
-      html += `<span class="clip-detail">${comp.clip_count} clips</span>`;
-      html += `<span class="clip-detail">${dur}</span>`;
-      html += `<a href="/video/compilation/${encodeURIComponent(comp.filename)}" target="_blank" class="upload-link">Play</a>`;
-      html += `<button class="btn-secondary" style="font-size:12px;padding:4px 8px" onclick="window._cc.deleteCompilationSourcesHandler('${escapeHtml(comp.compilation_id)}', ${comp.clip_count})">Clean up clips</button>`;
-      html += `<button class="comp-remove" onclick="window._cc.deleteCompilationHandler('${escapeHtml(comp.compilation_id)}')">&times;</button>`;
-      html += `</div>`;
-    }
-    container.innerHTML = html;
+    const rows = comps.map(comp => {
+      const dur = comp.total_duration ? `${Math.round(comp.total_duration)}s` : '';
+      return `
+        <div style="display:flex;align-items:center;gap:var(--cc-gap);padding:8px 12px;border-bottom:1px solid var(--cc-line-soft)">
+          <span class="cc-mono" style="flex:1;color:var(--cc-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(comp.filename)}</span>
+          <span class="cc-num cc-dim">${comp.clip_count} clips</span>
+          <span class="cc-num cc-dim">${dur}</span>
+          <a class="cc-btn" data-variant="ghost" data-size="sm" target="_blank"
+             href="/video/compilation/${encodeURIComponent(comp.filename)}">▶ Play</a>
+          <button class="cc-btn" data-variant="ghost" data-size="sm"
+                  onclick="window._cc.deleteCompilationSourcesHandler('${escapeHtml(comp.compilation_id)}', ${comp.clip_count})">Clean up clips</button>
+          <button class="cc-btn" data-variant="danger" data-size="sm"
+                  onclick="window._cc.deleteCompilationHandler('${escapeHtml(comp.compilation_id)}')">×</button>
+        </div>
+      `;
+    }).join('');
+    container.innerHTML = `
+      <div class="cc-h" style="margin:var(--cc-gap-2) var(--cc-pad-2) var(--cc-gap)">Past compilations</div>
+      ${rows}
+    `;
   } catch (e) { console.error('Failed to load compilations:', e); }
 }
 
