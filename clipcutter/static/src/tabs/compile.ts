@@ -1,6 +1,6 @@
 import { startCompilation, fetchCompilationStatus, cancelCompilation, fetchCompilations, deleteCompilation, deleteCompilationSources } from '../api';
 import type { KeptClipInfo } from '../api';
-import { escapeHtml } from '../utils';
+import { escapeHtml, openPreviewModal } from '../utils';
 import { tasks } from '../tasks';
 
 interface CompilationClip {
@@ -221,8 +221,8 @@ export async function loadPastCompilations(): Promise<void> {
           <span class="cc-mono" style="flex:1;color:var(--cc-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(comp.filename)}</span>
           <span class="cc-num cc-dim">${comp.clip_count} clips</span>
           <span class="cc-num cc-dim">${dur}</span>
-          <a class="cc-btn" data-variant="ghost" data-size="sm" target="_blank"
-             href="/video/compilation/${encodeURIComponent(comp.filename)}">▶ Play</a>
+          <button class="cc-btn" data-variant="ghost" data-size="sm"
+                  onclick="window._cc.previewCompilation('${escapeHtml(comp.filename)}')">▶ Play</button>
           <button class="cc-btn" data-variant="ghost" data-size="sm"
                   onclick="window._cc.deleteCompilationSourcesHandler('${escapeHtml(comp.compilation_id)}', ${comp.clip_count})">Clean up clips</button>
           <button class="cc-btn" data-variant="danger" data-size="sm"
@@ -235,6 +235,10 @@ export async function loadPastCompilations(): Promise<void> {
       ${rows}
     `;
   } catch (e) { console.error('Failed to load compilations:', e); }
+}
+
+export function previewCompilation(filename: string): void {
+  openPreviewModal('/video/compilation/' + encodeURIComponent(filename));
 }
 
 export async function deleteCompilationHandler(compId: string): Promise<void> {

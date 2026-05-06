@@ -4,7 +4,7 @@ import type { Task } from './tasks';
 import { initProcessTab, startProcessingHandler, scanFolderHandler, deleteFileHandler, scanCurrentFolder } from './tabs/process';
 import { loadClips, clipAction, addSegment, removeSegment, focusSegment, setSegmentPoint, seekToSegment, stopWaveformSync, deleteSourceHandler, getActiveSegmentIndex } from './tabs/review';
 import { loadExportTab, toggleAllClips, startEncodingHandler, cancelEncodingHandler, startYouTubeAuthHandler, revokeYouTubeAuthHandler, startUploadHandler, cancelUploadHandler, keptClips, deleteKeptClipHandler, openFolderHandler, previewClip, deleteEncodedClipHandler, deleteSourceFromExportHandler } from './tabs/encode';
-import { addSelectedToCompilation, removeCompClip, updateCompDuration, startCompilationHandler, cancelCompilationHandler, deleteCompilationHandler, deleteCompilationSourcesHandler } from './tabs/compile';
+import { addSelectedToCompilation, removeCompClip, updateCompDuration, startCompilationHandler, cancelCompilationHandler, deleteCompilationHandler, deleteCompilationSourcesHandler, previewCompilation } from './tabs/compile';
 
 // Expose handlers to HTML via window._cc (avoids global namespace pollution)
 declare global {
@@ -51,6 +51,7 @@ const handlers = {
   cancelCompilationHandler,
   deleteCompilationHandler,
   deleteCompilationSourcesHandler,
+  previewCompilation,
 };
 
 window._cc = handlers;
