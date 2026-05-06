@@ -137,6 +137,21 @@ class TestCompilationList:
         assert comp["file_exists"] is True
 
 
+class TestCompilationServe:
+    """GET /video/compilation/{filename} serves compilation video files."""
+
+    def test_serve_compilation_route_not_shadowed(self, output_dir, app_client):
+        comp_dir = output_dir / "clips" / "compilations"
+        comp_dir.mkdir(parents=True, exist_ok=True)
+        comp_path = comp_dir / "foo.mp4"
+        body = b"fake-mp4-bytes"
+        comp_path.write_bytes(body)
+
+        resp = app_client.get("/video/compilation/foo.mp4")
+        assert resp.status_code == 200
+        assert resp.content == body
+
+
 class TestCompilationDelete:
     """DELETE /api/compilation/{id} removes compilation."""
 

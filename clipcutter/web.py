@@ -61,9 +61,9 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
     app = FastAPI(title="ClipCutter")
 
     app.include_router(process.create_router(state, launch_cwd))
+    app.include_router(compile.create_router(state))
     app.include_router(review.create_router(state))
     app.include_router(encode.create_router(state))
-    app.include_router(compile.create_router(state))
     app.include_router(youtube.create_router(state))
 
     dist_dir = STATIC_DIR / "dist"
