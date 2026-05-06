@@ -59,6 +59,12 @@ window._savedVol = 0.5;
 let activeTab = 'process';
 
 function switchTab(tab: string): void {
+  // Pause any playing <video> so a clip in Review (or a preview modal in
+  // Export) doesn't keep playing when the user is on a different tab.
+  document.querySelectorAll<HTMLVideoElement>('video').forEach(v => {
+    if (!v.paused) v.pause();
+  });
+
   activeTab = tab;
   document.querySelectorAll<HTMLElement>('.cc-tab').forEach(t => { t.dataset.active = 'false'; });
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
