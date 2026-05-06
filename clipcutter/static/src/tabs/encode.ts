@@ -6,6 +6,8 @@ import {
 } from '../api';
 import type { KeptClipInfo, Playlist, StorageSummary, SourceVideo } from '../api';
 import { escapeHtml, fmtTime, formatClipTitle } from '../utils';
+import { tasks } from '../tasks';
+import { renderCompilationList, loadPastCompilations } from './compile';
 
 export let keptClips: KeptClipInfo[] = [];
 let encodingPresets: Array<{ name: string; display_name: string; extension: string }> = [];
@@ -15,12 +17,47 @@ let ytAuthenticated = false;
 let ytChannelName = '';
 let ytPlaylists: Playlist[] = [];
 
-let encodingPoll: ReturnType<typeof setInterval> | null = null;
-let uploadPoll: ReturnType<typeof setInterval> | null = null;
 let storageSummary: StorageSummary | null = null;
 let sourcesData: SourceVideo[] = [];
 
+type Subtab = 'clips' | 'compilation' | 'youtube';
+let activeSubtab: Subtab = 'clips';
+let sourcesExpanded = false;
+let exportInitialized = false;
+
+export function initExportTab(): void {
+  if (exportInitialized) return;
+  exportInitialized = true;
+  // Sub-tab nav
+  document.querySelectorAll<HTMLButtonElement>('.cc-subtabs > .cc-subtab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const s = btn.dataset.subtab as Subtab | undefined;
+      if (s) setSubtab(s);
+    });
+  });
+  // Sources accordion + GIF preset visibility delegated through #exportContent
+  const body = document.getElementById('exportContent');
+  if (body) {
+    body.addEventListener('click', (e) => {
+      const target = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
+      if (!target) return;
+      const action = target.dataset.action;
+      if (action === 'toggle-sources') {
+        sourcesExpanded = !sourcesExpanded;
+        renderActiveSubtab();
+      }
+    });
+  }
+}
+
+function setSubtab(s: Subtab): void {
+  activeSubtab = s;
+  renderSubtabsState();
+  renderActiveSubtab();
+}
+
 export async function loadExportTab(): Promise<void> {
+  initExportTab();
   try {
     const [keptData, presetsData, ytStatus, summaryData, sourcesResp] = await Promise.all([
       fetchKeptClips(),
@@ -50,244 +87,459 @@ export async function loadExportTab(): Promise<void> {
   renderExportView();
 }
 
-export function renderExportView(): void {
-  let html = '';
+function renderExportView(): void {
+  renderStorageBar();
+  renderSubtabsState();
+  renderActiveSubtab();
+}
 
-  // === Storage Summary Bar ===
-  if (storageSummary) {
-    const fmt = (mb: number) => mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb.toFixed(1) + ' MB';
-    html += `<div style="font-size:12px;color:#666;margin-bottom:16px;padding:10px 14px;background:#111;border-radius:8px;display:flex;gap:24px;flex-wrap:wrap">`;
-    html += `<span>Kept: <span style="color:#94a3b8">${storageSummary.kept.count} clips · ${fmt(storageSummary.kept.size_mb)}</span></span>`;
-    html += `<span>Encoded: <span style="color:#94a3b8">${storageSummary.encoded.count} clips · ${fmt(storageSummary.encoded.size_mb)}</span></span>`;
-    html += `<span>Compilations: <span style="color:#94a3b8">${storageSummary.compilations.count} · ${fmt(storageSummary.compilations.size_mb)}</span></span>`;
-    html += `<span style="margin-left:auto">Total: <span style="color:#e2e8f0;font-weight:600">${fmt(storageSummary.total_mb)}</span></span>`;
-    html += `</div>`;
+// ============================================================
+// Storage bar (top of Export view)
+// ============================================================
+
+function renderStorageBar(): void {
+  const fill = document.getElementById('storageBarFill');
+  const legend = document.getElementById('storageBarLegend');
+  if (!fill || !legend) return;
+  if (!storageSummary) {
+    fill.innerHTML = '';
+    legend.innerHTML = `<span class="cc-dim">no data yet</span>`;
+    return;
   }
+  const segs = [
+    { k: 'kept',         color: 'var(--cc-accent)', val: storageSummary.kept.size_mb,         count: storageSummary.kept.count },
+    { k: 'encoded',      color: 'var(--cc-good)',   val: storageSummary.encoded.size_mb,      count: storageSummary.encoded.count },
+    { k: 'compilations', color: 'var(--cc-warn)',   val: storageSummary.compilations.size_mb, count: storageSummary.compilations.count },
+  ];
+  const total = storageSummary.total_mb || segs.reduce((s, x) => s + x.val, 0) || 1;
 
-  // === Encode Clips ===
-  html += `<div class="export-section"><h2>Encode Clips</h2>`;
-  html += `<div class="export-toolbar"><div class="form-group">`;
-  html += `<label>Preset</label><select class="select-styled" id="encodePreset">`;
-  for (const p of encodingPresets) {
-    html += `<option value="${p.name}" ${p.name === defaultPreset ? 'selected' : ''}>${escapeHtml(p.display_name)}</option>`;
+  fill.innerHTML = segs.map(s =>
+    `<span style="width:${(s.val / total) * 100}%;background:${s.color}"></span>`
+  ).join('');
+
+  legend.innerHTML = segs.map(s => `
+    <div class="cc-storage-legend-item">
+      <span class="cc-legend-swatch" style="background:${s.color};width:8px;height:8px;border-radius:2px"></span>
+      <span style="text-transform:uppercase;letter-spacing:0.06em">${s.k}</span>
+      <span class="cc-num">${s.count} · ${fmtMb(s.val)}</span>
+    </div>
+  `).join('') + `
+    <div class="cc-storage-legend-item">
+      <span style="text-transform:uppercase;letter-spacing:0.06em">total</span>
+      <span class="cc-num cc-fg2">${fmtMb(total)}</span>
+    </div>
+  `;
+}
+
+// ============================================================
+// Sub-tab nav (chrome state, count badges, YouTube status)
+// ============================================================
+
+function renderSubtabsState(): void {
+  document.querySelectorAll<HTMLButtonElement>('.cc-subtabs > .cc-subtab').forEach(btn => {
+    btn.dataset.active = btn.dataset.subtab === activeSubtab ? 'true' : 'false';
+  });
+  const clipsCount = document.getElementById('clipsCount');
+  if (clipsCount) clipsCount.textContent = String(keptClips.length);
+  const compCount = document.getElementById('compCount');
+  if (compCount) compCount.textContent = '0'; // populated by compile.ts when on its sub-tab
+  const ytStatusEl = document.getElementById('ytSubtabStatus');
+  if (ytStatusEl) {
+    ytStatusEl.innerHTML = ytAuthenticated
+      ? `<span class="cc-dot" style="background:var(--cc-good)"></span><span>youtube · ${escapeHtml(ytChannelName || 'connected')}</span>`
+      : `<span class="cc-dot" style="background:var(--cc-fg-dim)"></span><span>youtube · not connected</span>`;
   }
-  html += `</select></div><div class="form-group">`;
-  html += `<label>FPS</label><select class="select-styled" id="encodeFps" style="width:100px">`;
-  for (const fps of encodingFpsOptions) {
-    html += `<option value="${fps ?? ''}">${fps ? fps + 'fps' : 'Original'}</option>`;
+}
+
+// ============================================================
+// Sub-tab dispatch
+// ============================================================
+
+function renderActiveSubtab(): void {
+  const body = document.getElementById('exportContent');
+  if (!body) return;
+  switch (activeSubtab) {
+    case 'clips':       renderClipsSubtab(body); break;
+    case 'compilation': renderCompilationSubtab(body); break;
+    case 'youtube':     renderYouTubeSubtab(body); break;
   }
-  html += `</select></div>`;
-  html += `<div class="form-group" id="slowdownGroup" style="display:none">`;
-  html += `<label>Slowdown</label><select class="select-styled" id="encodeSlowdown" style="width:100px">`;
-  html += `<option value="">None</option><option value="0.5">0.5x</option><option value="0.25">0.25x</option>`;
-  html += `</select></div>`;
-  html += `<button class="btn-secondary" onclick="window._cc.toggleAllClips('encode')">Select All</button>`;
-  html += `<button class="btn-process" id="btnEncode" onclick="window._cc.startEncodingHandler()">Encode Selected</button></div>`;
-  html += `<div id="encodeProgress" style="display:none"><div style="display:flex;align-items:center;gap:12px">`;
-  html += `<span class="progress-label" id="encodeProgressLabel"></span>`;
-  html += `<button class="btn-cancel" onclick="window._cc.cancelEncodingHandler()">Cancel</button></div>`;
-  html += `<div class="progress-bar"><div class="progress-fill" id="encodeProgressFill"></div></div></div>`;
+}
 
-  if (keptClips.length === 0) {
-    html += `<div class="empty-state">No kept clips yet.</div>`;
-  } else {
-    html += `<div class="clip-list">`;
-    for (let i = 0; i < keptClips.length; i++) {
-      const clip = keptClips[i];
-      const dur = clip.duration ? Math.round(clip.duration) + 's' : '';
-      const date = clip.clipped_at ? clip.clipped_at.slice(0, 10) : '';
-      const tags = (clip.detection_reasons || []).map(r =>
-        `<span class="tag tag-${r}">${r.replace('_', ' ')}</span>`
-      ).join('');
+// ============================================================
+// Clips sub-tab — kept clips table + encode controls + sources
+// ============================================================
 
-      // Size display
-      const keptMb = clip.size_mb != null ? clip.size_mb.toFixed(1) + ' MB' : '';
-      let sizeHtml = '';
-      if (keptMb) {
-        if (clip.encoded_exists && clip.encoded_size_mb != null) {
-          sizeHtml = `<span class="clip-detail">${keptMb} → ${clip.encoded_size_mb.toFixed(1)} MB</span>`;
-        } else {
-          sizeHtml = `<span class="clip-detail">${keptMb}</span>`;
-        }
-      }
+function renderClipsSubtab(body: HTMLElement): void {
+  body.innerHTML = `
+    <div class="cc-export-grid">
+      <div class="cc-panel">
+        <div class="cc-panel-head">
+          <span id="clipsPanelTitle">Kept clips · ${keptClips.length}</span>
+          <span style="flex:1"></span>
+          <button class="cc-btn" data-variant="ghost" data-size="sm" onclick="window._cc.toggleAllClips('encode')">Select all</button>
+        </div>
+        <div class="cc-panel-body">${renderClipsTable()}</div>
+      </div>
+      ${renderEncodePanel()}
+    </div>
+    ${renderSourcesAccordion()}
+  `;
 
-      // Encoded badge + delete-encoded button
-      let encodedHtml = '';
-      if (clip.encoded_exists) {
-        encodedHtml = `<span class="badge badge-encoded">Encoded</span>`;
-        encodedHtml += `<button class="btn-cancel" style="padding:2px 8px;font-size:11px" `
-          + `data-stem="${escapeHtml(clip.video_stem)}" data-filename="${escapeHtml(clip.filename)}" `
-          + `onclick="window._cc.deleteEncodedClipHandler(this)" title="Delete encoded version">✕ encoded</button>`;
-      }
-
-      html += `<div class="clip-row">`;
-      html += `<input type="checkbox" class="clip-checkbox encode-cb" data-index="${i}" checked>`;
-      html += `<span class="clip-name" title="${escapeHtml(clip.filename)}" style="cursor:pointer" onclick="window._cc.previewClip(${i})">${escapeHtml(clip.custom_name || clip.filename)}</span>`;
-      html += `<span class="clip-detail">${escapeHtml(clip.video_stem || '')}</span>`;
-      html += `<span class="clip-detail">${dur}</span>`;
-      html += `<span class="clip-detail" style="color:#888">${date}</span>`;
-      html += `<span class="tags" style="margin-bottom:0">${tags}</span>`;
-      html += encodedHtml;
-      html += sizeHtml;
-      html += `<button class="btn-cancel" style="margin-left:auto;padding:2px 8px;font-size:12px" `
-            + `data-stem="${escapeHtml(clip.video_stem)}" data-filename="${escapeHtml(clip.filename)}" `
-            + `onclick="window._cc.deleteKeptClipHandler(this)">✕</button>`;
-      html += `<button class="btn-secondary" style="padding:2px 8px;font-size:12px" `
-            + `data-stem="${escapeHtml(clip.video_stem)}" `
-            + `onclick="window._cc.openFolderHandler(this.dataset.stem)" title="Open folder in Explorer">📁</button>`;
-      html += `</div>`;
-    }
-    html += `</div>`;
-  }
-  html += `</div>`;
-
-  // === Build Compilation ===
-  if (keptClips.length >= 2) {
-    html += `<div class="export-section"><h2>Build Compilation</h2>`;
-    html += `<p style="color:#888;font-size:13px;margin-bottom:16px">Select clips above, then build a highlight reel. Drag to reorder.</p>`;
-    html += `<div class="comp-toolbar">`;
-    html += `<button class="btn-secondary" onclick="window._cc.addSelectedToCompilation()">Add Selected</button>`;
-    html += `<div class="form-group"><label>Transition</label>`;
-    html += `<select class="select-styled" id="compTransition" onchange="window._cc.updateCompDuration()">`;
-    html += `<option value="cut">Hard Cut</option><option value="crossfade">Crossfade</option></select></div>`;
-    html += `<div class="form-group" id="compXfadeGroup" style="display:none"><label>Duration</label>`;
-    html += `<input type="number" class="trim-time" id="compXfadeDur" value="0.5" min="0.1" max="3" step="0.1" style="width:70px" oninput="window._cc.updateCompDuration()">`;
-    html += `<span style="color:#888;font-size:12px">s</span></div>`;
-    html += `<div class="form-group"><label>Title</label>`;
-    html += `<input type="text" class="clip-name-input" id="compTitle" placeholder="Optional title..." style="width:200px"></div>`;
-    html += `</div>`;
-    html += `<div id="compList"></div>`;
-    html += `<div class="comp-footer">`;
-    html += `<span class="comp-summary" id="compSummary">No clips added yet.</span>`;
-    html += `<button class="btn-process" id="btnBuildComp" onclick="window._cc.startCompilationHandler()">Build</button>`;
-    html += `<button class="btn-cancel" onclick="window._cc.cancelCompilationHandler()">Cancel</button>`;
-    html += `</div>`;
-    html += `<div id="compProgress" style="display:none">`;
-    html += `<div style="display:flex;align-items:center;gap:12px">`;
-    html += `<span class="progress-label" id="compProgressLabel"></span></div>`;
-    html += `<div class="progress-bar"><div class="progress-fill" id="compProgressFill"></div></div></div>`;
-    html += `<div id="pastCompilations"></div></div>`;
-  }
-
-  // === YouTube Upload ===
-  html += `<div class="export-section"><h2>Upload to YouTube</h2>`;
-  if (!ytAuthenticated) {
-    html += `<div class="yt-auth-section">`;
-    html += `<div class="form-group"><label>Client ID</label><input type="text" id="ytClientId" placeholder="OAuth Client ID"></div>`;
-    html += `<div class="form-group"><label>Client Secret</label><input type="password" id="ytClientSecret" placeholder="OAuth Client Secret"></div>`;
-    html += `<button class="btn-process" onclick="window._cc.startYouTubeAuthHandler()">Sign In</button></div>`;
-    html += `<p class="yt-help">Create OAuth credentials at <a href="https://console.cloud.google.com" target="_blank" style="color:#60a5fa">console.cloud.google.com</a></p>`;
-  } else {
-    html += `<div class="yt-connected">`;
-    html += `<span style="color:#888;font-size:13px">Connected as:</span>`;
-    html += `<span class="yt-channel">${escapeHtml(ytChannelName)}</span>`;
-    html += `<button class="btn-signout" onclick="window._cc.revokeYouTubeAuthHandler()">Sign Out</button></div>`;
-    html += `<div class="yt-settings">`;
-    html += `<div class="form-group"><label>Privacy</label><select class="select-styled" id="ytPrivacy">`;
-    html += `<option value="private" selected>Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></div>`;
-    html += `<div class="form-group"><label>Playlist</label><div class="playlist-row"><select class="select-styled" id="ytPlaylist">`;
-    html += `<option value="">None</option>`;
-    for (const pl of ytPlaylists) {
-      html += `<option value="${escapeHtml(pl.id)}">${escapeHtml(pl.title)} (${pl.item_count})</option>`;
-    }
-    html += `<option value="__create__">+ Create New...</option></select></div></div>`;
-    html += `<div class="form-group"><label>Category</label><select class="select-styled" id="ytCategory">`;
-    html += `<option value="20" selected>Gaming</option><option value="24">Entertainment</option>`;
-    html += `<option value="22">People &amp; Blogs</option><option value="17">Sports</option>`;
-    html += `<option value="10">Music</option><option value="1">Film &amp; Animation</option><option value="23">Comedy</option>`;
-    html += `</select></div>`;
-    html += `<div class="form-group"><label>Tags</label><input type="text" class="title-input" id="ytTags" placeholder="tag1, tag2, tag3" style="width:100%"></div>`;
-    html += `<div class="form-group full-width"><label>Description Template</label>`;
-    html += `<textarea class="textarea-styled" id="ytDescription" placeholder="Enter a description template..."></textarea>`;
-    html += `<div class="template-vars">Variables: <code>{source_video}</code> <code>{start_time}</code> <code>{end_time}</code> <code>{duration}</code> <code>{detection_reasons}</code></div>`;
-    html += `</div></div>`;
-    html += `<div class="export-toolbar">`;
-    html += `<button class="btn-secondary" onclick="window._cc.toggleAllClips('upload')">Select All</button>`;
-    html += `<button class="btn-process" id="btnUpload" onclick="window._cc.startUploadHandler()">Upload Selected</button></div>`;
-    html += `<div id="uploadProgress" style="display:none">`;
-    html += `<div style="display:flex;align-items:center;gap:12px">`;
-    html += `<span class="progress-label" id="uploadProgressLabel"></span>`;
-    html += `<button class="btn-cancel" onclick="window._cc.cancelUploadHandler()">Cancel</button></div>`;
-    html += `<div class="progress-bar"><div class="progress-fill" id="uploadProgressFill"></div></div></div>`;
-    if (keptClips.length === 0) {
-      html += `<div class="empty-state" style="padding:40px 0">No kept clips to upload.</div>`;
-    } else {
-      html += `<div id="uploadClipList">`;
-      for (let i = 0; i < keptClips.length; i++) {
-        const clip = keptClips[i];
-        const defaultTitle = clip.custom_name || formatClipTitle(clip.filename);
-        const alreadyUploaded = !!clip.youtube_url;
-        let statusHtml = `<span class="badge badge-ready">Ready</span>`;
-        if (clip.youtube_upload_status === 'failed') {
-          statusHtml = `<span class="badge badge-error">Failed</span>`;
-        } else if (alreadyUploaded) {
-          statusHtml = `<a class="upload-link" href="${escapeHtml(clip.youtube_url!)}" target="_blank">Uploaded</a>`;
-        }
-        html += `<div class="clip-row" id="upload-row-${i}">`;
-        html += `<input type="checkbox" class="clip-checkbox upload-cb" data-index="${i}" ${alreadyUploaded ? '' : 'checked'}>`;
-        html += `<span class="clip-detail" style="flex-shrink:0;width:120px" title="${escapeHtml(clip.filename)}">${escapeHtml(clip.filename)}</span>`;
-        html += `<span class="clip-detail" style="margin-right:4px">Title:</span>`;
-        html += `<input type="text" class="title-input upload-title" data-index="${i}" value="${escapeHtml(defaultTitle)}">`;
-        html += statusHtml;
-        html += `</div>`;
-      }
-      html += `</div>`;
-    }
-  }
-  html += `</div>`;
-
-  // === Source Videos ===
-  const deletableSources = sourcesData.filter(s => s.exists);
-  if (deletableSources.length > 0) {
-    html += `<div class="export-section"><h2>Source Videos</h2>`;
-    html += `<p style="color:#888;font-size:13px;margin-bottom:16px">Delete source videos to free disk space. Only sources with existing files are shown.</p>`;
-    for (const src of deletableSources) {
-      const name = src.source_path.split(/[/\\]/).pop() ?? src.source_path;
-      const pending = src.total - src.kept - src.discarded;
-      const reviewSummary = src.fully_reviewed
-        ? `${src.kept} kept / ${src.discarded} discarded`
-        : `${src.kept} kept / ${src.discarded} discarded / ${pending} pending`;
-      const reviewColor = src.fully_reviewed ? '#4ade80' : '#fbbf24';
-      html += `<div class="source-row" id="export-src-${escapeHtml(src.video_stem)}">`;
-      html += `<div class="source-info">`;
-      html += `<div class="source-name" title="${escapeHtml(src.source_path)}">${escapeHtml(name)}</div>`;
-      html += `<div class="source-detail" style="color:${reviewColor}">${reviewSummary}</div>`;
-      html += `</div>`;
-      html += `<div class="source-size">${src.size_mb} MB</div>`;
-      html += `<button class="btn-delete" data-stem="${escapeHtml(src.video_stem)}" `
-            + `onclick="window._cc.deleteSourceFromExportHandler(this.dataset.stem, this)">Delete</button>`;
-      html += `</div>`;
-    }
-    const totalMb = deletableSources.reduce((sum, s) => sum + s.size_mb, 0);
-    html += `<div class="cleanup-total">Total reclaimable: ${totalMb.toFixed(1)} MB</div>`;
-    html += `</div>`;
-  }
-
-  document.getElementById('exportContent')!.innerHTML = html;
-
-  // Post-render: GIF slowdown visibility
+  // Bind encode preset / GIF slowdown visibility
   const presetSelect = document.getElementById('encodePreset') as HTMLSelectElement | null;
   if (presetSelect) {
-    const updateSlowdown = () => {
+    const updateSlowdown = (): void => {
       const sg = document.getElementById('slowdownGroup');
       if (sg) sg.style.display = presetSelect.value === 'gif' ? 'flex' : 'none';
     };
     updateSlowdown();
     presetSelect.addEventListener('change', updateSlowdown);
   }
+  // Selection count + Encode button label live-update
+  body.querySelectorAll<HTMLInputElement>('.encode-cb').forEach(cb => {
+    cb.addEventListener('change', updateEncodeSelectionCount);
+  });
+  updateEncodeSelectionCount();
+}
 
-  // Playlist create handler
+function renderClipsTable(): string {
+  if (keptClips.length === 0) {
+    return `<div class="empty-state" style="padding:40px 24px">No kept clips yet. Decide some in the Review tab.</div>`;
+  }
+  const rows = keptClips.map((clip, i) => {
+    const customName = clip.custom_name ? `<span class="cc-dim" style="margin-left:6px">· ${escapeHtml(clip.custom_name)}</span>` : '';
+    const sourceMb = clip.size_mb != null ? `${clip.size_mb.toFixed(0)} MB` : '—';
+    const encodedMb = clip.encoded_exists && clip.encoded_size_mb != null
+      ? `${clip.encoded_size_mb.toFixed(0)} MB`
+      : '<span class="cc-dim">—</span>';
+    const preset = clip.encoding_preset
+      ? escapeHtml(clip.encoding_preset)
+      : '<span class="cc-dim">—</span>';
+    let ytCell = '<span class="cc-dim">—</span>';
+    if (clip.youtube_url) {
+      ytCell = `<a class="cc-pill" data-status="processed" href="${escapeHtml(clip.youtube_url)}" target="_blank" style="text-decoration:none">uploaded</a>`;
+    } else if (clip.youtube_upload_status === 'failed') {
+      ytCell = `<span class="cc-pill" data-status="stale">failed</span>`;
+    } else if (clip.youtube_upload_status === 'queued' || clip.youtube_upload_status === 'uploading') {
+      ytCell = `<span class="cc-pill" data-status="pending">${escapeHtml(clip.youtube_upload_status)}</span>`;
+    }
+
+    return `
+      <tr>
+        <td style="width:24px">
+          <input type="checkbox" class="encode-cb" data-index="${i}" checked
+                 style="accent-color:var(--cc-accent)"
+                 onclick="event.stopPropagation()">
+        </td>
+        <td class="cc-mono">${escapeHtml(clip.filename)}${customName}</td>
+        <td class="cc-num cc-fg2" style="width:80px">${sourceMb}</td>
+        <td class="cc-num" style="width:80px">${encodedMb}</td>
+        <td class="cc-fg2" style="width:80px">${preset}</td>
+        <td style="width:100px">${ytCell}</td>
+        <td style="width:120px;text-align:right">
+          <div style="display:inline-flex;gap:4px;justify-content:flex-end">
+            <button class="cc-btn" data-variant="ghost" data-size="sm" title="Preview"
+                    onclick="event.stopPropagation();window._cc.previewClip(${i})">▶</button>
+            <button class="cc-btn" data-variant="ghost" data-size="sm" title="Open folder"
+                    data-stem="${escapeHtml(clip.video_stem)}"
+                    onclick="event.stopPropagation();window._cc.openFolderHandler(this.dataset.stem)">📂</button>
+            ${clip.encoded_exists
+              ? `<button class="cc-btn" data-variant="danger" data-size="sm" title="Delete encoded"
+                         data-stem="${escapeHtml(clip.video_stem)}" data-filename="${escapeHtml(clip.filename)}"
+                         onclick="event.stopPropagation();window._cc.deleteEncodedClipHandler(this)">×enc</button>`
+              : ''}
+            <button class="cc-btn" data-variant="danger" data-size="sm" title="Delete clip"
+                    data-stem="${escapeHtml(clip.video_stem)}" data-filename="${escapeHtml(clip.filename)}"
+                    onclick="event.stopPropagation();window._cc.deleteKeptClipHandler(this)">×</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <table class="cc-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>Clip</th>
+          <th>Source</th>
+          <th>Encoded</th>
+          <th>Preset</th>
+          <th>YouTube</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderEncodePanel(): string {
+  const presetButtons = encodingPresets.map(p => {
+    const isDefault = p.name === defaultPreset;
+    return `<option value="${p.name}" ${isDefault ? 'selected' : ''}>${escapeHtml(p.display_name)}</option>`;
+  }).join('');
+  const fpsOptions = encodingFpsOptions.map(fps =>
+    `<option value="${fps ?? ''}">${fps ? fps + ' fps' : 'Original'}</option>`
+  ).join('');
+  return `
+    <div class="cc-panel">
+      <div class="cc-panel-head"><span>Encode</span></div>
+      <div class="cc-panel-body" style="padding:var(--cc-pad-2);display:flex;flex-direction:column;gap:var(--cc-gap-2)">
+        <div class="cc-col" style="gap:6px">
+          <span class="cc-label">Preset</span>
+          <select class="cc-select" id="encodePreset">${presetButtons}</select>
+        </div>
+        <div class="cc-col" style="gap:6px">
+          <span class="cc-label">Target FPS</span>
+          <select class="cc-select" id="encodeFps">${fpsOptions}</select>
+        </div>
+        <div class="cc-col" id="slowdownGroup" style="gap:6px;display:none">
+          <span class="cc-label">Slowdown (GIF only)</span>
+          <select class="cc-select" id="encodeSlowdown">
+            <option value="">None (1.0×)</option>
+            <option value="0.5">0.5×</option>
+            <option value="0.25">0.25×</option>
+          </select>
+        </div>
+        <div style="height:1px;background:var(--cc-line);margin:4px 0"></div>
+        <div class="cc-col" style="gap:6px;font-size:var(--cc-fs-xs);color:var(--cc-fg-2)">
+          <div style="display:flex;justify-content:space-between">
+            <span>Selected</span>
+            <span class="cc-num" id="encodeSelCount">0 clips</span>
+          </div>
+        </div>
+        <button class="cc-btn" data-variant="primary" id="btnEncode"
+                onclick="window._cc.startEncodingHandler()">Encode selected</button>
+      </div>
+    </div>
+  `;
+}
+
+function updateEncodeSelectionCount(): void {
+  const count = document.querySelectorAll<HTMLInputElement>('.encode-cb:checked').length;
+  const el = document.getElementById('encodeSelCount');
+  if (el) el.textContent = `${count} clip${count === 1 ? '' : 's'}`;
+  const btn = document.getElementById('btnEncode') as HTMLButtonElement | null;
+  if (btn && !btn.disabled) {
+    btn.textContent = count > 0 ? `Encode ${count} clip${count === 1 ? '' : 's'}` : 'Encode selected';
+  }
+}
+
+function renderSourcesAccordion(): string {
+  const deletable = sourcesData.filter(s => s.exists);
+  if (deletable.length === 0) return '';
+  const totalMb = deletable.reduce((sum, s) => sum + s.size_mb, 0);
+  const rows = deletable.map(src => {
+    const name = src.source_path.split(/[/\\]/).pop() ?? src.source_path;
+    const pending = src.total - src.kept - src.discarded;
+    const reviewSummary = src.fully_reviewed
+      ? `${src.kept} kept · ${src.discarded} discarded`
+      : `${src.kept} kept · ${src.discarded} discarded · ${pending} pending`;
+    const reviewColor = src.fully_reviewed ? 'var(--cc-good)' : 'var(--cc-warn)';
+    return `
+      <div id="export-src-${escapeHtml(src.video_stem)}"
+           style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--cc-line-soft)">
+        <div style="flex:1;min-width:0">
+          <div class="cc-mono" style="color:var(--cc-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+               title="${escapeHtml(src.source_path)}">${escapeHtml(name)}</div>
+          <div style="font-size:var(--cc-fs-xs);color:${reviewColor};margin-top:2px">${reviewSummary}</div>
+        </div>
+        <div class="cc-num cc-fg2">${src.size_mb} MB</div>
+        <button class="cc-btn" data-variant="danger" data-size="sm"
+                data-stem="${escapeHtml(src.video_stem)}"
+                onclick="window._cc.deleteSourceFromExportHandler(this.dataset.stem, this)">Delete</button>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="cc-panel" style="margin-top:var(--cc-gap-2)">
+      <button class="cc-panel-head" data-action="toggle-sources"
+              style="cursor:pointer;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--cc-line);width:100%;font-family:inherit;color:inherit;letter-spacing:inherit;text-transform:inherit;font-size:inherit;font-weight:inherit;padding:var(--cc-pad) var(--cc-pad-2)">
+        <span>${sourcesExpanded ? '▾' : '▸'} Source videos</span>
+        <span style="flex:1"></span>
+        <span class="cc-num cc-dim">${deletable.length} files · ${totalMb.toFixed(1)} MB reclaimable</span>
+      </button>
+      <div class="cc-panel-body" style="display:${sourcesExpanded ? 'block' : 'none'};padding:0">${rows}</div>
+    </div>
+  `;
+}
+
+// ============================================================
+// Compilation sub-tab — sequence + build controls
+// ============================================================
+
+function renderCompilationSubtab(body: HTMLElement): void {
+  body.innerHTML = `
+    <div class="cc-comp">
+      <div class="cc-panel">
+        <div class="cc-panel-head">
+          <span id="compSummary">No clips added yet.</span>
+          <span style="flex:1"></span>
+          <button class="cc-btn" data-variant="ghost" data-size="sm"
+                  onclick="window._cc.addSelectedToCompilation()">+ Add selected</button>
+        </div>
+        <div class="cc-panel-body">
+          <div class="cc-comp-list" id="compList"></div>
+          <div id="pastCompilations"></div>
+        </div>
+      </div>
+      <div class="cc-panel">
+        <div class="cc-panel-head"><span>Build</span></div>
+        <div class="cc-panel-body" style="padding:var(--cc-pad-2);display:flex;flex-direction:column;gap:var(--cc-gap-2)">
+          <div class="cc-col" style="gap:6px">
+            <span class="cc-label">Title</span>
+            <input class="cc-input" id="compTitle" placeholder="Optional title…">
+          </div>
+          <div class="cc-col" style="gap:6px">
+            <span class="cc-label">Transition</span>
+            <select class="cc-select" id="compTransition" onchange="window._cc.updateCompDuration()">
+              <option value="cut">Hard cut</option>
+              <option value="crossfade">Crossfade</option>
+            </select>
+          </div>
+          <div class="cc-col" id="compXfadeGroup" style="gap:6px;display:none">
+            <span class="cc-label">Crossfade duration</span>
+            <input type="number" class="cc-input" id="compXfadeDur" value="0.5" min="0.1" max="3" step="0.1"
+                   oninput="window._cc.updateCompDuration()">
+          </div>
+          <div style="height:1px;background:var(--cc-line);margin:4px 0"></div>
+          <button class="cc-btn" data-variant="primary" id="btnBuildComp"
+                  onclick="window._cc.startCompilationHandler()">Build compilation</button>
+        </div>
+      </div>
+    </div>
+  `;
+  renderCompilationList();
+  void loadPastCompilations();
+}
+
+// ============================================================
+// YouTube sub-tab — auth + upload form + clip list
+// ============================================================
+
+function renderYouTubeSubtab(body: HTMLElement): void {
+  if (!ytAuthenticated) {
+    body.innerHTML = `
+      <div class="cc-upload">
+        <div class="cc-h">YouTube not connected</div>
+        <p class="cc-dim" style="font-size:var(--cc-fs-sm);max-width:560px">
+          Sign in with an OAuth client to upload clips. Create credentials at
+          <a href="https://console.cloud.google.com" target="_blank" style="color:var(--cc-accent)">console.cloud.google.com</a>.
+        </p>
+        <div class="cc-upload-grid">
+          <span class="cc-label">Client ID</span>
+          <input class="cc-input" type="text" id="ytClientId" placeholder="OAuth Client ID">
+          <span class="cc-label">Client Secret</span>
+          <input class="cc-input" type="password" id="ytClientSecret" placeholder="OAuth Client Secret">
+        </div>
+        <div style="display:flex;justify-content:flex-end">
+          <button class="cc-btn" data-variant="primary"
+                  onclick="window._cc.startYouTubeAuthHandler()">Sign in</button>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const playlistOptions = ['<option value="">— None —</option>']
+    .concat(ytPlaylists.map(pl =>
+      `<option value="${escapeHtml(pl.id)}">${escapeHtml(pl.title)} (${pl.item_count})</option>`
+    ))
+    .concat(['<option value="__create__">+ Create new…</option>'])
+    .join('');
+
+  const clipRows = keptClips.map((clip, i) => {
+    const defaultTitle = clip.custom_name || formatClipTitle(clip.filename);
+    const alreadyUploaded = !!clip.youtube_url;
+    let statusHtml = `<span class="cc-pill" data-status="unprocessed">ready</span>`;
+    if (alreadyUploaded) {
+      statusHtml = `<a class="cc-pill" data-status="processed" href="${escapeHtml(clip.youtube_url!)}" target="_blank" style="text-decoration:none">uploaded</a>`;
+    } else if (clip.youtube_upload_status === 'failed') {
+      statusHtml = `<span class="cc-pill" data-status="stale">failed</span>`;
+    }
+    return `
+      <tr id="upload-row-${i}">
+        <td style="width:24px">
+          <input type="checkbox" class="upload-cb" data-index="${i}" ${alreadyUploaded ? '' : 'checked'}
+                 style="accent-color:var(--cc-accent)">
+        </td>
+        <td class="cc-mono">${escapeHtml(clip.filename)}</td>
+        <td>
+          <input type="text" class="cc-input upload-title" data-index="${i}"
+                 value="${escapeHtml(defaultTitle)}" style="width:100%">
+        </td>
+        <td style="width:100px">${statusHtml}</td>
+      </tr>
+    `;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="cc-upload">
+      <div style="display:flex;align-items:center;gap:var(--cc-gap-2)">
+        <div class="cc-h" style="margin:0">Connected as</div>
+        <span class="cc-mono cc-fg2">${escapeHtml(ytChannelName)}</span>
+        <span style="flex:1"></span>
+        <button class="cc-btn" data-variant="ghost" data-size="sm"
+                onclick="window._cc.revokeYouTubeAuthHandler()">Sign out</button>
+      </div>
+      <div class="cc-upload-grid">
+        <span class="cc-label">Privacy</span>
+        <select class="cc-select" id="ytPrivacy">
+          <option value="private" selected>Private</option>
+          <option value="unlisted">Unlisted</option>
+          <option value="public">Public</option>
+        </select>
+        <span class="cc-label">Category</span>
+        <select class="cc-select" id="ytCategory">
+          <option value="20" selected>Gaming</option>
+          <option value="24">Entertainment</option>
+          <option value="22">People &amp; Blogs</option>
+          <option value="17">Sports</option>
+          <option value="10">Music</option>
+          <option value="1">Film &amp; Animation</option>
+          <option value="23">Comedy</option>
+        </select>
+        <span class="cc-label">Playlist</span>
+        <select class="cc-select" id="ytPlaylist">${playlistOptions}</select>
+        <span class="cc-label">Tags</span>
+        <input class="cc-input" type="text" id="ytTags" placeholder="tag1, tag2, tag3">
+        <span class="cc-label">Description</span>
+        <textarea id="ytDescription" placeholder="Description template — supports {source_video} {start_time} {end_time} {duration} {detection_reasons}"></textarea>
+      </div>
+      <div class="cc-panel">
+        <div class="cc-panel-head">
+          <span>Clips · ${keptClips.length}</span>
+          <span style="flex:1"></span>
+          <button class="cc-btn" data-variant="ghost" data-size="sm"
+                  onclick="window._cc.toggleAllClips('upload')">Toggle all</button>
+        </div>
+        <div class="cc-panel-body">
+          ${keptClips.length === 0
+            ? `<div class="empty-state" style="padding:40px 24px">No kept clips to upload.</div>`
+            : `<table class="cc-table"><tbody>${clipRows}</tbody></table>`}
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:var(--cc-gap)">
+        <button class="cc-btn" data-variant="primary" id="btnUpload"
+                onclick="window._cc.startUploadHandler()">Upload selected</button>
+      </div>
+    </div>
+  `;
+
   const plSelect = document.getElementById('ytPlaylist') as HTMLSelectElement | null;
   if (plSelect) {
     plSelect.addEventListener('change', function () {
-      if (this.value === '__create__') { createPlaylistHandler(); this.value = ''; }
+      if (this.value === '__create__') { void createPlaylistHandler(); this.value = ''; }
     });
   }
-
-  // Initialize compilation UI (from compile.ts)
-  window._cc.renderCompilationList();
-  window._cc.loadPastCompilations();
 }
+
+// ============================================================
+// Existing handlers (unchanged behaviour, modal/chip drives progress)
+// ============================================================
 
 export function toggleAllClips(section: 'encode' | 'upload'): void {
   const selector = section === 'encode' ? '.encode-cb' : '.upload-cb';
@@ -295,16 +547,18 @@ export function toggleAllClips(section: 'encode' | 'upload'): void {
   if (!checkboxes.length) return;
   const allChecked = checkboxes.every(cb => cb.checked);
   checkboxes.forEach(cb => { cb.checked = !allChecked; });
+  if (section === 'encode') updateEncodeSelectionCount();
 }
 
 export async function startEncodingHandler(): Promise<void> {
   const checkboxes = Array.from(document.querySelectorAll<HTMLInputElement>('.encode-cb:checked'));
   if (!checkboxes.length) { alert('Select at least one clip to encode.'); return; }
+  if (tasks.isRunning('encode')) { alert('An encode task is already running.'); return; }
 
   const preset = (document.getElementById('encodePreset') as HTMLSelectElement).value;
   const fpsVal = (document.getElementById('encodeFps') as HTMLSelectElement).value;
   const fps = fpsVal ? parseInt(fpsVal) : null;
-  const slowdownVal = (document.getElementById('encodeSlowdown') as HTMLSelectElement).value;
+  const slowdownVal = (document.getElementById('encodeSlowdown') as HTMLSelectElement)?.value ?? '';
   const slowdown = slowdownVal ? parseFloat(slowdownVal) : null;
 
   const clipsToEncode = checkboxes.map(cb => {
@@ -315,47 +569,50 @@ export async function startEncodingHandler(): Promise<void> {
 
   const btn = document.getElementById('btnEncode') as HTMLButtonElement;
   btn.disabled = true;
-  btn.textContent = 'Encoding...';
+  btn.textContent = 'Encoding…';
 
   try {
     await startEncoding({ clips: clipsToEncode, preset, target_fps: fps, slowdown_factor: slowdown });
-    document.getElementById('encodeProgress')!.style.display = 'block';
-    encodingPoll = setInterval(pollEncodingStatus, 800);
   } catch (e) {
     alert((e as Error).message);
     btn.disabled = false;
-    btn.textContent = 'Encode Selected';
+    btn.textContent = 'Encode selected';
+    return;
   }
+
+  tasks.start({
+    kind: 'encode',
+    label: 'Encoding clips',
+    subtitle: `${clipsToEncode.length} clip${clipsToEncode.length === 1 ? '' : 's'} · ${preset}`,
+    pollMs: 800,
+    cancel: cancelEncoding,
+    fetchStatus: async () => {
+      const data = await fetchEncodeStatus();
+      const completedCount = (data.completed || []).length;
+      const pct = data.total > 0 ? Math.round((completedCount / data.total) * 100) : 0;
+      const subtitle = data.current_file
+        ? `clip ${data.current_index || 0} of ${data.total}: ${data.current_file}`
+        : `${completedCount} / ${data.total}`;
+      const error = !data.running && data.errors?.length
+        ? `${data.errors.length} error(s) — ${data.errors[0].error}`
+        : null;
+      return { running: data.running, pct, subtitle, error };
+    },
+    formatResult: (t) => t.subtitle ?? '',
+  });
 }
 
-async function pollEncodingStatus(): Promise<void> {
-  try {
-    const data = await fetchEncodeStatus();
-    const label = document.getElementById('encodeProgressLabel');
-    const fill = document.getElementById('encodeProgressFill');
-    if (data.total > 0) {
-      const pct = Math.round(((data.completed || []).length / data.total) * 100);
-      if (label) label.textContent = `Encoding clip ${data.current_index || 0} of ${data.total}: ${data.current_file || ''}`;
-      if (fill) fill.style.width = pct + '%';
-    }
-    if (!data.running) {
-      if (encodingPoll) { clearInterval(encodingPoll); encodingPoll = null; }
-      const btn = document.getElementById('btnEncode') as HTMLButtonElement;
-      btn.disabled = false;
-      btn.textContent = 'Encode Selected';
-      if (fill) fill.style.width = '100%';
-      if (label) {
-        label.textContent = data.errors?.length
-          ? `Done with ${data.errors.length} error(s). ${(data.completed || []).length} clip(s) encoded.`
-          : `Encoding complete! ${(data.completed || []).length} clip(s) encoded.`;
-      }
-      await loadExportTab();
-    }
-  } catch (e) { console.error('Encoding poll error:', e); }
-}
+tasks.addEventListener('task-complete', (e) => {
+  const t = (e as CustomEvent).detail.task;
+  if (t.kind !== 'encode') return;
+  const btn = document.getElementById('btnEncode') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = false; updateEncodeSelectionCount(); }
+});
 
 export async function cancelEncodingHandler(): Promise<void> {
-  await cancelEncoding().catch(console.error);
+  const running = tasks.getAll().find(x => x.kind === 'encode' && x.state === 'running');
+  if (running) await tasks.cancel(running.id);
+  else await cancelEncoding().catch(console.error);
 }
 
 export async function startYouTubeAuthHandler(): Promise<void> {
@@ -365,7 +622,7 @@ export async function startYouTubeAuthHandler(): Promise<void> {
   try {
     const data = await startYouTubeAuth(clientId, clientSecret);
     window.open(data.auth_url, 'youtube-auth', 'width=600,height=700');
-    const listener = async (event: MessageEvent) => {
+    const listener = async (event: MessageEvent): Promise<void> => {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === 'youtube-auth-success') {
         window.removeEventListener('message', listener);
@@ -388,11 +645,12 @@ export async function revokeYouTubeAuthHandler(): Promise<void> {
 export async function startUploadHandler(): Promise<void> {
   const checkboxes = Array.from(document.querySelectorAll<HTMLInputElement>('.upload-cb:checked'));
   if (!checkboxes.length) { alert('Select at least one clip to upload.'); return; }
+  if (tasks.isRunning('upload')) { alert('An upload task is already running.'); return; }
 
   const privacy = (document.getElementById('ytPrivacy') as HTMLSelectElement).value;
   const playlistId = (document.getElementById('ytPlaylist') as HTMLSelectElement).value;
   const categoryId = (document.getElementById('ytCategory') as HTMLSelectElement).value;
-  const tags = (document.getElementById('ytTags') as HTMLInputElement).value.trim();
+  const tagsRaw = (document.getElementById('ytTags') as HTMLInputElement).value.trim();
   const descTemplate = (document.getElementById('ytDescription') as HTMLTextAreaElement).value;
 
   const clipsToUpload = checkboxes.map(cb => {
@@ -409,58 +667,82 @@ export async function startUploadHandler(): Promise<void> {
     return {
       video_stem: clip.video_stem, filename: clip.filename,
       use_encoded: !!clip.encoded_exists, title, description,
-      tags: tags ? tags.split(',').map(t => t.trim()).filter(t => t) : [],
+      tags: tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(t => t) : [],
       category_id: categoryId, privacy, playlist_id: playlistId || null,
     };
   });
 
   const btn = document.getElementById('btnUpload') as HTMLButtonElement;
-  btn.disabled = true; btn.textContent = 'Uploading...';
+  btn.disabled = true; btn.textContent = 'Uploading…';
   try {
     await startUpload({ clips: clipsToUpload });
-    document.getElementById('uploadProgress')!.style.display = 'block';
-    uploadPoll = setInterval(pollUploadStatus, 1000);
-  } catch (e) { alert((e as Error).message); btn.disabled = false; btn.textContent = 'Upload Selected'; }
-}
+  } catch (e) {
+    alert((e as Error).message);
+    btn.disabled = false;
+    btn.textContent = 'Upload selected';
+    return;
+  }
 
-async function pollUploadStatus(): Promise<void> {
-  try {
-    const data = await fetchUploadStatus();
-    const label = document.getElementById('uploadProgressLabel');
-    const fill = document.getElementById('uploadProgressFill');
-    if (data.total > 0) {
+  let lastCompletedCount = 0;
+
+  tasks.start({
+    kind: 'upload',
+    label: 'Uploading to YouTube',
+    subtitle: `${clipsToUpload.length} clip${clipsToUpload.length === 1 ? '' : 's'}`,
+    pollMs: 1000,
+    cancel: cancelUpload,
+    fetchStatus: async () => {
+      const data = await fetchUploadStatus();
       const filePct = data.bytes_total > 0 ? Math.round((data.bytes_sent / data.bytes_total) * 100) : 0;
       const completedClips = (data.completed || []).length;
-      const overallPct = Math.round(((completedClips + filePct / 100) / data.total) * 100);
-      if (label) label.textContent = `Uploading clip ${data.current_index || 0} of ${data.total}: ${data.current_file || ''} (${filePct}%)`;
-      if (fill) fill.style.width = overallPct + '%';
-    }
-    if (data.completed) {
-      for (const c of data.completed) {
+      const overallPct = data.total > 0
+        ? Math.round(((completedClips + filePct / 100) / data.total) * 100)
+        : 0;
+
+      // Splice newly-completed uploads into the per-clip list as links
+      const newLines: string[] = [];
+      const completed = data.completed || [];
+      for (let i = lastCompletedCount; i < completed.length; i++) {
+        const c = completed[i];
         const idx = keptClips.findIndex(k => k.filename === c.filename);
         if (idx >= 0) {
           const row = document.getElementById('upload-row-' + idx);
-          const badge = row?.querySelector('.badge, .upload-link');
-          if (badge) badge.outerHTML = `<a class="upload-link" href="${escapeHtml(c.url)}" target="_blank">Uploaded</a>`;
+          const status = row?.querySelector('.cc-pill');
+          if (status) status.outerHTML = `<a class="cc-pill" data-status="processed" href="${escapeHtml(c.url)}" target="_blank" style="text-decoration:none">uploaded</a>`;
         }
+        newLines.push(`✓ ${c.filename}`);
       }
-    }
-    if (!data.running) {
-      if (uploadPoll) { clearInterval(uploadPoll); uploadPoll = null; }
-      const btn = document.getElementById('btnUpload') as HTMLButtonElement;
-      btn.disabled = false; btn.textContent = 'Upload Selected';
-      if (fill) fill.style.width = '100%';
-      if (label) {
-        label.textContent = data.errors?.length
-          ? `Done with ${data.errors.length} error(s). ${(data.completed || []).length} clip(s) uploaded.`
-          : `Upload complete! ${(data.completed || []).length} clip(s) uploaded.`;
-      }
-    }
-  } catch (e) { console.error('Upload poll error:', e); }
+      lastCompletedCount = completed.length;
+
+      const error = !data.running && data.errors?.length
+        ? `${data.errors.length} error(s) — ${data.errors[0].error}`
+        : null;
+
+      return {
+        running: data.running,
+        pct: overallPct,
+        subtitle: data.current_file
+          ? `${data.current_index || 0} / ${data.total} · ${data.current_file} (${filePct}%)`
+          : `${completedClips} / ${data.total}`,
+        newLogLines: newLines,
+        error,
+      };
+    },
+    formatResult: (t) => t.subtitle ?? '',
+  });
 }
 
+tasks.addEventListener('task-complete', (e) => {
+  const t = (e as CustomEvent).detail.task;
+  if (t.kind !== 'upload') return;
+  const btn = document.getElementById('btnUpload') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = false; btn.textContent = 'Upload selected'; }
+});
+
 export async function cancelUploadHandler(): Promise<void> {
-  await cancelUpload().catch(console.error);
+  const running = tasks.getAll().find(x => x.kind === 'upload' && x.state === 'running');
+  if (running) await tasks.cancel(running.id);
+  else await cancelUpload().catch(console.error);
 }
 
 async function createPlaylistHandler(): Promise<void> {
@@ -487,22 +769,16 @@ export async function deleteKeptClipHandler(btn: HTMLButtonElement): Promise<voi
   if (!confirm(`Delete "${filename}"?`)) return;
   try {
     await deleteKeptClip(stem, filename);
-    const row = btn.closest('.clip-row') as HTMLElement | null;
-    if (row) row.remove();
     const idx = keptClips.findIndex(c => c.video_stem === stem && c.filename === filename);
     if (idx >= 0) keptClips.splice(idx, 1);
-  } catch (e) {
-    alert((e as Error).message);
-  }
+    renderExportView();
+  } catch (e) { alert((e as Error).message); }
 }
 
 export async function openFolderHandler(video_stem: string | undefined): Promise<void> {
   if (!video_stem) return;
-  try {
-    await openKeptFolder(video_stem);
-  } catch (e) {
-    alert((e as Error).message);
-  }
+  try { await openKeptFolder(video_stem); }
+  catch (e) { alert((e as Error).message); }
 }
 
 export async function deleteEncodedClipHandler(btn: HTMLButtonElement): Promise<void> {
@@ -528,17 +804,20 @@ export async function deleteEncodedClipHandler(btn: HTMLButtonElement): Promise<
 export async function deleteSourceFromExportHandler(videoStem: string, btn: HTMLButtonElement): Promise<void> {
   if (!confirm('Permanently delete this source video? This cannot be undone.')) return;
   btn.disabled = true;
-  btn.textContent = 'Deleting...';
+  btn.textContent = 'Deleting…';
   try {
     const data = await deleteSource(videoStem);
     const row = document.getElementById('export-src-' + videoStem);
     if (row) {
-      row.querySelector('.btn-delete')!.outerHTML = '<button class="btn-deleted">Deleted</button>';
-      const sizeEl = row.querySelector('.source-size') as HTMLElement;
-      let label = data.freed_mb + ' MB freed';
-      if (data.leftover > 0) label += ` (${data.leftover} clip(s) locked)`;
-      sizeEl.textContent = label;
-      sizeEl.style.color = data.leftover > 0 ? '#fbbf24' : '#4ade80';
+      const action = row.querySelector('button');
+      if (action) action.outerHTML = `<span class="cc-pill" data-status="processed">Deleted</span>`;
+      const sizeEl = row.querySelector('.cc-num') as HTMLElement | null;
+      if (sizeEl) {
+        let label = `${data.freed_mb} MB freed`;
+        if (data.leftover > 0) label += ` (${data.leftover} clip(s) locked)`;
+        sizeEl.textContent = label;
+        sizeEl.style.color = data.leftover > 0 ? 'var(--cc-warn)' : 'var(--cc-good)';
+      }
     }
   } catch (e) {
     alert((e as Error).message);
@@ -548,7 +827,7 @@ export async function deleteSourceFromExportHandler(videoStem: string, btn: HTML
 }
 
 export function previewClip(index: number): void {
-  document.getElementById('clipPreviewModal')?.remove();  // close any existing modal
+  document.getElementById('clipPreviewModal')?.remove();
   const clip = keptClips[index];
   const url = clip.encoded_video_url || clip.video_url;
 
@@ -574,4 +853,11 @@ export function previewClip(index: number): void {
   const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
   modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+}
+
+// ---- Helpers ----
+
+function fmtMb(mb: number): string {
+  if (mb >= 1024) return (mb / 1024).toFixed(2) + ' GB';
+  return mb.toFixed(0) + ' MB';
 }

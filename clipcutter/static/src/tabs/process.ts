@@ -1,11 +1,22 @@
 import { fetchDefaults, startProcessing, fetchProcessStatus, fetchFolderScan, deleteFolderFile, VideoEntry, FolderScanResult } from '../api';
 import { escapeHtml } from '../utils';
+import { tasks } from '../tasks';
 
-let pollTimer: ReturnType<typeof setInterval> | null = null;
 let lastScanResult: FolderScanResult | null = null;
 let lastScanFolder = '';
 
+const PROCESS_BTN_LABEL = '▶ Process folder';
+
 export async function initProcessTab(): Promise<void> {
+  // Bind slider value-displays
+  bindSlider('sensitivity', 'sensitivityVal', (n) => n.toFixed(1));
+  bindSlider('context',     'contextVal',     (n) => `${Math.round(n)}s`);
+  bindSlider('staleThreshold', 'staleThresholdVal', (n) => `${Math.round(n)}d`);
+  // Stale slider also re-filters the stale list as it moves
+  document.getElementById('staleThreshold')?.addEventListener('input', () => {
+    if (lastScanResult) renderStaleCandidates(lastScanResult, getThreshold());
+  });
+
   try {
     const data = await fetchDefaults();
     const folderInput = document.getElementById('folderPath') as HTMLInputElement | null;
@@ -18,10 +29,19 @@ export async function initProcessTab(): Promise<void> {
   }
 }
 
+function bindSlider(inputId: string, valueId: string, fmt: (n: number) => string): void {
+  const input = document.getElementById(inputId) as HTMLInputElement | null;
+  const out = document.getElementById(valueId);
+  if (!input || !out) return;
+  const sync = (): void => { out.textContent = fmt(parseFloat(input.value)); };
+  sync();
+  input.addEventListener('input', sync);
+}
+
 export async function scanFolderHandler(): Promise<void> {
   const folderInput = document.getElementById('folderPath') as HTMLInputElement | null;
   const folder = folderInput?.value.trim() ?? '';
-  if (!folder) { alert('Enter a folder path.'); return; }
+  if (!folder) { setPanelMessage('Enter a folder path.'); return; }
   await scanFolder(folder);
 }
 
@@ -34,13 +54,12 @@ async function scanFolder(folder: string): Promise<void> {
     const result = await fetchFolderScan(folder);
     lastScanResult = result;
     lastScanFolder = folder;
+    renderFolderStats(result);
     renderVideosInFolder(result);
-    const threshold = getThreshold();
-    renderStaleCandidates(result, threshold);
-    document.getElementById('folderScanPanel')!.style.display = 'block';
+    renderStaleCandidates(result, getThreshold());
+    updatePanelTitle(folder, result);
   } catch (e) {
     showScanError((e as Error).message);
-    document.getElementById('folderScanPanel')!.style.display = 'none';
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Scan'; }
   }
@@ -52,35 +71,65 @@ function getThreshold(): number {
   return isNaN(val) || val < 1 ? 30 : val;
 }
 
+function updatePanelTitle(folder: string, result: FolderScanResult): void {
+  const el = document.getElementById('folderPanelTitle');
+  if (!el) return;
+  const name = folder.split(/[\\/]/).filter(Boolean).pop() ?? folder;
+  el.textContent = `${name} · ${result.videos.length} video${result.videos.length === 1 ? '' : 's'}`;
+}
+
+function renderFolderStats(result: FolderScanResult): void {
+  const grid = document.getElementById('folderStats');
+  if (!grid) return;
+  const counts = { unprocessed: 0, pending_review: 0, processed: 0 };
+  for (const v of result.videos) counts[v.status]++;
+  setText('statUnprocessed', String(counts.unprocessed));
+  setText('statPending',     String(counts.pending_review));
+  setText('statProcessed',   String(counts.processed));
+  grid.style.display = result.videos.length > 0 ? 'grid' : 'none';
+}
+
+function setText(id: string, text: string): void {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
 function renderVideosInFolder(result: FolderScanResult): void {
   const section = document.getElementById('videosInFolderSection')!;
   if (result.videos.length === 0) {
     section.innerHTML = `
-      <div class="scan-panel-header">
-        <span class="scan-panel-title">Videos in Folder</span>
-        <span class="scan-panel-meta">No video files found</span>
+      <div style="padding:24px;text-align:center;color:var(--cc-fg-dim);font-size:var(--cc-fs-sm)">
+        No video files found in this folder.
       </div>`;
     return;
   }
 
-  const totalGb = (result.total_size_mb / 1024).toFixed(2);
   const rows = result.videos.map(v => {
-    const [statusClass, statusText] = statusDisplay(v.status);
+    const pill = pillFor(v.status);
+    const safeAttr = htmlAttr(v.filename);
     return `<tr>
-      <td class="filename">${escapeHtml(v.filename)}</td>
-      <td>${formatSize(v.size_mb)}</td>
-      <td>${v.age_days}d</td>
-      <td class="${statusClass}">${statusText}</td>
+      <td class="cc-mono" style="width:46%">${escapeHtml(v.filename)}</td>
+      <td class="cc-num cc-fg2" style="width:80px">${formatSize(v.size_mb)}</td>
+      <td class="cc-num cc-dim" style="width:70px">${v.age_days}d</td>
+      <td style="width:140px"><span class="cc-pill" data-status="${pill.status}">${pill.text}</span></td>
+      <td style="width:90px;text-align:right">
+        <button class="cc-btn" data-variant="danger" data-size="sm"
+                data-filename="${safeAttr}" onclick="event.stopPropagation();window._cc.deleteFileHandler(this)">Delete</button>
+      </td>
     </tr>`;
   }).join('');
 
   section.innerHTML = `
-    <div class="scan-panel-header">
-      <span class="scan-panel-title">Videos in Folder</span>
-      <span class="scan-panel-meta">${result.videos.length} video${result.videos.length !== 1 ? 's' : ''} &middot; ${totalGb} GB</span>
-    </div>
-    <table class="scan-table">
-      <thead><tr><th>Filename</th><th>Size</th><th>Age</th><th>Status</th></tr></thead>
+    <table class="cc-table">
+      <thead>
+        <tr>
+          <th>Filename</th>
+          <th>Size</th>
+          <th>Age</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
       <tbody>${rows}</tbody>
     </table>`;
 }
@@ -93,43 +142,37 @@ function renderStaleCandidates(result: FolderScanResult, thresholdDays: number):
 
   if (stale.length === 0) {
     section.style.display = 'none';
+    section.innerHTML = '';
     return;
   }
 
   section.style.display = 'block';
-  const totalMb = stale.reduce((sum, v) => sum + v.size_mb, 0);
-  const totalGb = (totalMb / 1024).toFixed(2);
+  section.style.borderTop = '1px solid var(--cc-line)';
 
   const rows = stale.map(v => {
-    const category = v.status === 'unprocessed' ? 'unprocessed' : 'processed, kept';
-    const rowClass = v.status === 'unprocessed' ? 'scan-stale-unprocessed' : 'scan-stale-processed';
-    const safeAttr = v.filename.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const safeAttr = htmlAttr(v.filename);
+    const reviewedNote = v.status === 'unprocessed' ? 'never reviewed' : 'reviewed';
     return `<tr>
-      <td class="filename ${rowClass}">${escapeHtml(v.filename)}</td>
-      <td>${formatSize(v.size_mb)}</td>
-      <td style="color:#f87171">${v.age_days}d</td>
-      <td style="color:#64748b">${category}</td>
-      <td><button class="btn-delete-file" data-filename="${safeAttr}" onclick="window._cc.deleteFileHandler(this)">Delete</button></td>
+      <td class="cc-mono" style="width:46%">${escapeHtml(v.filename)}</td>
+      <td class="cc-num cc-fg2" style="width:80px">${formatSize(v.size_mb)}</td>
+      <td class="cc-num cc-dim" style="width:70px">${v.age_days}d</td>
+      <td style="width:140px"><span class="cc-pill" data-status="stale">${escapeHtml(reviewedNote)}</span></td>
+      <td style="width:90px;text-align:right">
+        <button class="cc-btn" data-variant="danger" data-size="sm"
+                data-filename="${safeAttr}" onclick="window._cc.deleteFileHandler(this)">Delete</button>
+      </td>
     </tr>`;
   }).join('');
 
   section.innerHTML = `
-    <div class="scan-panel-header">
-      <span class="scan-panel-title stale">Stale Candidates</span>
-      <div class="stale-threshold-row">
-        Threshold: <input id="staleThreshold" type="number" value="${thresholdDays}" min="1" oninput="window._cc.thresholdChangedHandler()" />
-        days &nbsp;&middot;&nbsp; ${stale.length} file${stale.length !== 1 ? 's' : ''} &middot; ${totalGb} GB
-      </div>
+    <div class="cc-panel-head" style="border-top:0">
+      <span style="color:var(--cc-warn)">⚠ Stale (${stale.length})</span>
+      <span class="cc-dim" style="font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">· reviewed &gt; ${thresholdDays}d ago</span>
+      <span class="cc-spacer" style="flex:1"></span>
     </div>
-    <table class="scan-table">
-      <thead><tr><th>Filename</th><th>Size</th><th>Age</th><th>Category</th><th></th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-}
-
-export function thresholdChangedHandler(): void {
-  if (!lastScanResult) return;
-  renderStaleCandidates(lastScanResult, getThreshold());
+    <div class="cc-panel-body">
+      <table class="cc-table"><tbody>${rows}</tbody></table>
+    </div>`;
 }
 
 export async function deleteFileHandler(btn: HTMLButtonElement): Promise<void> {
@@ -145,7 +188,7 @@ export async function deleteFileHandler(btn: HTMLButtonElement): Promise<void> {
     btn.disabled = false;
     btn.textContent = 'Delete';
     btn.parentElement?.querySelectorAll('.delete-error').forEach(el => el.remove());
-    btn.insertAdjacentHTML('afterend', ` <span class="delete-error" style="color:#f87171;font-size:11px">${escapeHtml((e as Error).message)}</span>`);
+    btn.insertAdjacentHTML('afterend', ` <span class="delete-error" style="color:var(--cc-bad);font-size:var(--cc-fs-xs);margin-left:6px">${escapeHtml((e as Error).message)}</span>`);
   }
 }
 
@@ -154,9 +197,13 @@ export async function startProcessingHandler(): Promise<void> {
   const folder = folderInput?.value.trim() ?? '';
   if (!folder) { alert('Enter a folder path.'); return; }
 
+  if (tasks.isRunning('process')) {
+    alert('A processing task is already running.');
+    return;
+  }
+
   const sensitivity = parseFloat((document.getElementById('sensitivity') as HTMLInputElement).value) || 1.0;
-  const ctxVal = (document.getElementById('context') as HTMLInputElement).value.trim();
-  const context = ctxVal ? parseFloat(ctxVal) : null;
+  const context = parseFloat((document.getElementById('context') as HTMLInputElement).value) || 20;
 
   const btn = document.getElementById('btnProcess') as HTMLButtonElement;
   btn.disabled = true;
@@ -166,47 +213,83 @@ export async function startProcessingHandler(): Promise<void> {
 
   try {
     await startProcessing({ folder, sensitivity, context });
-    pollTimer = setInterval(pollStatus, 800);
   } catch (e) {
     alert('Error: ' + (e as Error).message);
     btn.disabled = false;
-    btn.textContent = 'Process';
+    btn.textContent = PROCESS_BTN_LABEL;
+    return;
   }
-}
 
-async function pollStatus(): Promise<void> {
-  try {
-    const data = await fetchProcessStatus();
-    const box = document.getElementById('logBox')!;
-    box.innerHTML = data.log.map(line => `<div class="log-line">${escapeHtml(line)}</div>`).join('');
-    box.scrollTop = box.scrollHeight;
+  let loggedCount = 0;
+  const startedAt = Date.now();
+  startElapsedTicker();
 
-    if (!data.running) {
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-      const btn = document.getElementById('btnProcess') as HTMLButtonElement;
-      btn.disabled = false;
-      btn.textContent = 'Process';
-
-      if (data.error) {
-        box.innerHTML += `<div class="log-line log-error">Error: ${escapeHtml(data.error)}</div>`;
-      } else {
-        box.innerHTML += `<div class="log-line log-done">Done! Switch to Review tab to review clips.</div>`;
-        // Re-scan after processing completes so statuses update
-        const folder = (document.getElementById('folderPath') as HTMLInputElement)?.value.trim();
-        if (folder) await scanFolder(folder);
+  tasks.start({
+    kind: 'process',
+    label: 'Processing folder',
+    subtitle: folder,
+    pollMs: 800,
+    fetchStatus: async () => {
+      const s = await fetchProcessStatus();
+      const newLines = s.log.slice(loggedCount);
+      loggedCount = s.log.length;
+      // Mirror the log into the legacy logBox so the Process tab's
+      // behaviour is preserved when the modal is dismissed.
+      if (newLines.length) {
+        const box = document.getElementById('logBox');
+        if (box) {
+          for (const line of newLines) appendLogLine(box, line);
+          box.scrollTop = box.scrollHeight;
+        }
       }
-      box.scrollTop = box.scrollHeight;
-    }
-  } catch (e) {
-    console.error('Poll error:', e);
+      return {
+        running: s.running,
+        newLogLines: newLines,
+        subtitle: s.log[s.log.length - 1] ?? folder,
+        error: s.error,
+      };
+    },
+    formatResult: (t) => {
+      const dur = t.finishedAt && t.startedAt ? Math.round((t.finishedAt - t.startedAt) / 1000) : Math.round((Date.now() - startedAt) / 1000);
+      return `${t.log.length} log line${t.log.length === 1 ? '' : 's'} in ${dur}s`;
+    },
+  });
+}
+
+// Subscribe once to flip the legacy Process button back when the
+// process task finishes (regardless of whether the modal is open).
+tasks.addEventListener('task-complete', (e) => {
+  const t = (e as CustomEvent).detail.task;
+  if (t.kind !== 'process') return;
+  stopElapsedTicker();
+  const btn = document.getElementById('btnProcess') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = false; btn.textContent = PROCESS_BTN_LABEL; }
+  const box = document.getElementById('logBox');
+  if (box) {
+    const div = document.createElement('div');
+    div.className = 'cc-log-line';
+    div.innerHTML = t.error
+      ? `<span class="cc-log-tag" data-kind="warn">[error]</span><span style="color:var(--cc-bad)">${escapeHtml(t.error)}</span>`
+      : `<span class="cc-log-tag" data-kind="hit">[done]</span><span>Switch to Review tab to review clips.</span>`;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+});
+
+/** Re-scan whatever folder was last scanned. Used by the task-complete hook. */
+export function scanCurrentFolder(): void {
+  if (lastScanFolder) {
+    void scanFolder(lastScanFolder);
   }
 }
 
-function statusDisplay(status: VideoEntry['status']): [string, string] {
+// ---- Helpers ----
+
+function pillFor(status: VideoEntry['status']): { status: string; text: string } {
   switch (status) {
-    case 'processed':    return ['scan-status-processed', '✓ processed'];
-    case 'pending_review': return ['scan-status-pending', '⏳ pending review'];
-    case 'unprocessed':  return ['scan-status-unprocessed', '✗ unprocessed'];
+    case 'processed':      return { status: 'processed',   text: 'processed' };
+    case 'pending_review': return { status: 'pending',     text: 'pending review' };
+    case 'unprocessed':    return { status: 'unprocessed', text: 'unprocessed' };
   }
 }
 
@@ -215,18 +298,63 @@ function formatSize(mb: number): string {
   return mb.toFixed(0) + ' MB';
 }
 
+function htmlAttr(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function setPanelMessage(msg: string): void {
+  const section = document.getElementById('videosInFolderSection');
+  if (!section) return;
+  section.innerHTML = `<div style="padding:24px;text-align:center;color:var(--cc-bad);font-size:var(--cc-fs-sm)">${escapeHtml(msg)}</div>`;
+}
+
 function clearScanError(): void {
   const existing = document.getElementById('scanError');
   if (existing) existing.remove();
 }
 
 function showScanError(msg: string): void {
-  clearScanError();
-  const form = document.querySelector('.form-section')!;
-  const err = document.createElement('div');
-  err.id = 'scanError';
-  err.className = 'scan-panel-error';
-  err.style.marginTop = '8px';
-  err.textContent = msg;
-  form.appendChild(err);
+  setPanelMessage(msg);
+}
+
+function appendLogLine(box: HTMLElement, line: string): void {
+  // Try to parse "[HH:MM:SS] message" out of pipeline log strings; fall back to plain.
+  const m = /^\[(\d{2}:\d{2}:\d{2})\]\s*(.*)$/.exec(line);
+  const div = document.createElement('div');
+  div.className = 'cc-log-line';
+  if (m) {
+    const time = document.createElement('span');
+    time.className = 'cc-log-time';
+    time.textContent = m[1];
+    const tag = document.createElement('span');
+    tag.className = 'cc-log-tag';
+    const lower = m[2].toLowerCase();
+    tag.dataset.kind = lower.startsWith('error') ? 'warn' : (lower.includes('found') || lower.includes('clip')) ? 'hit' : 'info';
+    tag.textContent = '[info]';
+    const msg = document.createElement('span');
+    msg.textContent = m[2];
+    div.append(time, tag, msg);
+  } else {
+    div.textContent = line;
+  }
+  box.appendChild(div);
+}
+
+let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+function startElapsedTicker(): void {
+  stopElapsedTicker();
+  const start = Date.now();
+  const el = document.getElementById('logElapsed');
+  if (!el) return;
+  const tick = (): void => {
+    const s = Math.round((Date.now() - start) / 1000);
+    const m = Math.floor(s / 60);
+    const rs = s % 60;
+    el.textContent = `${String(m).padStart(2, '0')}:${String(rs).padStart(2, '0')} elapsed`;
+  };
+  tick();
+  elapsedTimer = setInterval(tick, 1000);
+}
+function stopElapsedTicker(): void {
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
 }

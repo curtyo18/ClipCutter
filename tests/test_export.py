@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import create_pending_clip, create_pending_clip_long, save_test_metadata
+from tests.conftest import create_pending_clip, create_pending_clip_long, save_test_metadata, keep_and_wait
 
 
 class TestEncodingPresets:
@@ -28,10 +28,8 @@ class TestEncodingPresets:
         save_test_metadata(output_dir, stem, [clip], f"/fake/{stem}.mp4")
 
         # Keep the clip first
-        app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={"trim_start": 0.0, "trim_end": 0.0},
-        )
+        keep_and_wait(app_client, stem, "clip_001.mp4",
+                      json_body={"trim_start": 0.0, "trim_end": 0.0})
 
         # Encode
         resp = app_client.post("/api/encode", json={
@@ -72,13 +70,10 @@ class TestCustomNameInExport:
         save_test_metadata(output_dir, stem, [clip], "/fake/namevid.mp4")
 
         # Keep with custom name
-        app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={
-                "custom_name": "My Great Moment",
-                "trim_start": 0.0, "trim_end": 0.0,
-            },
-        )
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={
+            "custom_name": "My Great Moment",
+            "trim_start": 0.0, "trim_end": 0.0,
+        })
 
         # Encode with copy preset
         resp = app_client.post("/api/encode", json={
@@ -108,14 +103,11 @@ class TestCustomNameInExport:
         save_test_metadata(output_dir, stem, [clip], "/fake/trimenc.mp4")
 
         # Keep with trim + custom name
-        app_client.post(
-            f"/api/clips/{stem}/clip_001.mp4/keep",
-            json={
-                "custom_name": "Trimmed",
-                "trim_start": 0.0,
-                "trim_end": 1.0,
-            },
-        )
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={
+            "custom_name": "Trimmed",
+            "trim_start": 0.0,
+            "trim_end": 1.0,
+        })
 
         # Encode
         app_client.post("/api/encode", json={
@@ -177,8 +169,7 @@ class TestKeptClipsResponse:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/catvid.mp4",
                            processed_at="2026-03-15T10:00:00")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
-                        json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
 
         resp = app_client.get("/api/kept")
         assert resp.status_code == 200
@@ -205,10 +196,8 @@ class TestKeptClipsResponse:
         save_test_metadata(output_dir, newer_stem, [newer_clip], "/fake/newer.mp4",
                            processed_at="2026-06-01T00:00:00")
 
-        app_client.post(f"/api/clips/{older_stem}/clip_001.mp4/keep",
-                        json={"segments": []})
-        app_client.post(f"/api/clips/{newer_stem}/clip_001.mp4/keep",
-                        json={"segments": []})
+        keep_and_wait(app_client, older_stem, "clip_001.mp4", json_body={"segments": []})
+        keep_and_wait(app_client, newer_stem, "clip_001.mp4", json_body={"segments": []})
 
         resp = app_client.get("/api/kept")
         clips = resp.json()["clips"]
@@ -227,8 +216,7 @@ class TestDeleteKeptClip:
         clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
                                    source_video="/fake/delvid.mp4")
         save_test_metadata(output_dir, stem, [clip], "/fake/delvid.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
-                        json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
 
         kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
         assert kept_path.exists()
@@ -243,8 +231,7 @@ class TestDeleteKeptClip:
         clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
                                    source_video="/fake/delmetavid.mp4")
         save_test_metadata(output_dir, stem, [clip], "/fake/delmetavid.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
-                        json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
 
         app_client.delete(f"/api/kept/{stem}/clip_001.mp4")
 
@@ -260,8 +247,7 @@ class TestDeleteKeptClip:
         clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
                                    source_video="/fake/delvid2.mp4")
         save_test_metadata(output_dir, stem, [clip], "/fake/delvid2.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
-                        json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
         app_client.delete(f"/api/kept/{stem}/clip_001.mp4")
 
         resp = app_client.get("/api/kept")
@@ -274,8 +260,7 @@ class TestDeleteKeptClip:
         clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
                                    source_video="/fake/emptyfoldervid.mp4")
         save_test_metadata(output_dir, stem, [clip], "/fake/emptyfoldervid.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
-                        json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
 
         kept_dir = output_dir / "clips" / "kept" / stem
         assert kept_dir.exists()
@@ -295,8 +280,7 @@ class TestOpenFolder:
         clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
                                    source_video="/fake/openfolder.mp4")
         save_test_metadata(output_dir, stem, [clip], "/fake/openfolder.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep",
-                        json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
 
         with patch("clipcutter.routes.encode.os.startfile") as mock_startfile:
             resp = app_client.get(f"/api/open-folder/kept/{stem}")
@@ -317,7 +301,7 @@ class TestKeptClipSizes:
                                         source_video="/fake/sizevid.mp4",
                                         file_duration_s=120.0)
         save_test_metadata(output_dir, stem, [clip], "/fake/sizevid.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
 
         resp = app_client.get("/api/kept")
         assert resp.status_code == 200
@@ -330,7 +314,7 @@ class TestKeptClipSizes:
         clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
                                    source_video="/fake/sizevid2.mp4")
         save_test_metadata(output_dir, stem, [clip], "/fake/sizevid2.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
 
         resp = app_client.get("/api/kept")
         kept = next(c for c in resp.json()["clips"] if c["video_stem"] == stem)
@@ -342,7 +326,7 @@ class TestKeptClipSizes:
                                         source_video="/fake/sizeenc.mp4",
                                         file_duration_s=120.0)
         save_test_metadata(output_dir, stem, [clip], "/fake/sizeenc.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
         app_client.post("/api/encode", json={
             "clips": [{"video_stem": stem, "filename": "clip_001.mp4"}],
             "preset": "original",
@@ -363,7 +347,7 @@ class TestDeleteEncodedClip:
         clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
                                    source_video="/fake/delencvid.mp4")
         save_test_metadata(output_dir, stem, [clip], "/fake/delencvid.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
         app_client.post("/api/encode", json={
             "clips": [{"video_stem": stem, "filename": "clip_001.mp4"}],
             "preset": "original",
@@ -387,7 +371,7 @@ class TestDeleteEncodedClip:
         clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
                                    source_video="/fake/delencmeta.mp4")
         save_test_metadata(output_dir, stem, [clip], "/fake/delencmeta.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
         app_client.post("/api/encode", json={
             "clips": [{"video_stem": stem, "filename": "clip_001.mp4"}],
             "preset": "original",
@@ -409,7 +393,7 @@ class TestDeleteEncodedClip:
         clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
                                    source_video="/fake/delenckeep.mp4")
         save_test_metadata(output_dir, stem, [clip], "/fake/delenckeep.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
         app_client.post("/api/encode", json={
             "clips": [{"video_stem": stem, "filename": "clip_001.mp4"}],
             "preset": "original",
@@ -440,7 +424,7 @@ class TestStorageSummary:
                                         source_video="/fake/summary.mp4",
                                         file_duration_s=120.0)
         save_test_metadata(output_dir, stem, [clip], "/fake/summary.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
 
         resp = app_client.get("/api/storage-summary")
         assert resp.status_code == 200
@@ -455,7 +439,7 @@ class TestStorageSummary:
                                         source_video="/fake/sumtotal.mp4",
                                         file_duration_s=120.0)
         save_test_metadata(output_dir, stem, [clip], "/fake/sumtotal.mp4")
-        app_client.post(f"/api/clips/{stem}/clip_001.mp4/keep", json={"segments": []})
+        keep_and_wait(app_client, stem, "clip_001.mp4", json_body={"segments": []})
 
         resp = app_client.get("/api/storage-summary")
         data = resp.json()

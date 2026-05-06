@@ -1,5 +1,8 @@
 """Shared application state for ClipCutter web server."""
 import threading
+import time
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -226,6 +229,81 @@ class CompilationState:
             }
 
 
+@dataclass
+class KeepTask:
+    """One in-flight keep (trim) operation."""
+    task_id: str
+    video_stem: str
+    filename: str
+    status: str = "running"  # running | done | error
+    progress_step: str = "Starting…"
+    error: Optional[str] = None
+    trimmed: bool = False
+    started_at: float = field(default_factory=time.time)
+    finished_at: Optional[float] = None
+
+
+class KeepState:
+    """Per-task state for trim/keep operations.
+
+    Unlike the singleton kinds (process / encode / compile / upload), keep
+    can run multiple in parallel — different clips, different files. Each
+    task is keyed by a UUID; finished tasks are kept around briefly so
+    the FE can fetch the final state, then garbage-collected.
+    """
+
+    GC_AFTER_SECONDS = 60.0
+
+    def __init__(self):
+        self.tasks: dict[str, KeepTask] = {}
+        self._lock = threading.Lock()
+
+    def start(self, video_stem: str, filename: str) -> str:
+        tid = uuid.uuid4().hex
+        with self._lock:
+            self.tasks[tid] = KeepTask(task_id=tid, video_stem=video_stem, filename=filename)
+        return tid
+
+    def update_step(self, tid: str, step: str) -> None:
+        with self._lock:
+            t = self.tasks.get(tid)
+            if t and t.status == "running":
+                t.progress_step = step
+
+    def finish(self, tid: str, error: Optional[str] = None, trimmed: bool = False) -> None:
+        with self._lock:
+            t = self.tasks.get(tid)
+            if not t:
+                return
+            t.status = "error" if error else "done"
+            t.error = error
+            t.trimmed = trimmed
+            t.finished_at = time.time()
+
+    def snapshot(self) -> dict:
+        now = time.time()
+        with self._lock:
+            # Drop tasks that finished a while ago to keep state bounded.
+            self.tasks = {
+                tid: t for tid, t in self.tasks.items()
+                if t.finished_at is None or (now - t.finished_at) < self.GC_AFTER_SECONDS
+            }
+            return {
+                "tasks": [
+                    {
+                        "task_id": t.task_id,
+                        "video_stem": t.video_stem,
+                        "filename": t.filename,
+                        "status": t.status,
+                        "progress_step": t.progress_step,
+                        "error": t.error,
+                        "trimmed": t.trimmed,
+                    }
+                    for t in self.tasks.values()
+                ]
+            }
+
+
 class AppState:
     """Container for all shared state, instantiated once per app."""
 
@@ -235,3 +313,4 @@ class AppState:
         self.enc = EncodingState()
         self.upl = UploadState()
         self.comp = CompilationState()
+        self.keep = KeepState()

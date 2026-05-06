@@ -67,6 +67,20 @@ export interface KeepRequest {
   quality?: string;
 }
 
+export interface KeepTaskInfo {
+  task_id: string;
+  video_stem: string;
+  filename: string;
+  status: 'running' | 'done' | 'error';
+  progress_step: string;
+  error: string | null;
+  trimmed: boolean;
+}
+
+export interface KeepStatus {
+  tasks: KeepTaskInfo[];
+}
+
 export interface ProcessStatus {
   running: boolean;
   log: string[];
@@ -232,7 +246,8 @@ export const fetchClips = () => apiGet<{ clips: ClipInfo[]; total: number }>('/a
 export const fetchWaveform = (stem: string, filename: string) =>
   apiGet<WaveformData>(`/api/waveform/${stem}/${filename}`);
 export const keepClip = (stem: string, filename: string, req: KeepRequest) =>
-  apiPost<{ status: string; trimmed: boolean }>(`/api/clips/${stem}/${filename}/keep`, req);
+  apiPost<{ task_id: string; status: string }>(`/api/clips/${stem}/${filename}/keep`, req);
+export const fetchKeepStatus = () => apiGet<KeepStatus>('/api/clips/keep/status');
 export const discardClip = (stem: string, filename: string) =>
   apiPost<{ status: string }>(`/api/clips/${stem}/${filename}/discard`, {});
 
@@ -260,7 +275,7 @@ export const cancelCompilation = () => apiPost<{ status: string }>('/api/compila
 export const fetchCompilations = () => apiGet<{ compilations: CompilationInfo[] }>('/api/compilations');
 export const deleteCompilation = (compId: string) => apiDelete(`/api/compilation/${compId}`);
 export const deleteCompilationSources = (compId: string) =>
-  apiDelete(`/api/compilation/${compId}/sources`);
+  apiDelete<{ deleted_count: number }>(`/api/compilation/${compId}/sources`);
 
 // ---- YouTube ----
 
