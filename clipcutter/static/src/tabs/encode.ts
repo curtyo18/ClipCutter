@@ -231,7 +231,7 @@ function renderClipsTable(): string {
                  style="accent-color:var(--cc-accent)"
                  onclick="event.stopPropagation()">
         </td>
-        <td class="cc-mono">${escapeHtml(clip.filename)}${customName}</td>
+        <td class="cc-mono"><span style="cursor:pointer" onclick="event.stopPropagation();window._cc.previewClip(${i})">${escapeHtml(clip.filename)}${customName}</span></td>
         <td class="cc-num cc-fg2" style="width:80px">${sourceMb}</td>
         <td class="cc-num" style="width:80px">${encodedMb}</td>
         <td class="cc-fg2" style="width:80px">${preset}</td>
