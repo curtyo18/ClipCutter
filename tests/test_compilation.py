@@ -136,6 +136,54 @@ class TestCompilationList:
         assert comp["status"] == "complete"
         assert comp["file_exists"] is True
 
+    def test_list_compilations_includes_clip_count(self, output_dir, app_client):
+        stem = "compcount"
+        clips = _setup_kept_clips(output_dir, app_client, stem, count=2)
+
+        app_client.post("/api/compilation", json={
+            "clips": [
+                {"video_stem": stem, "filename": clips[0].filename},
+                {"video_stem": stem, "filename": clips[1].filename},
+            ],
+            "transition": "cut",
+            "title": "counttest",
+        })
+        _wait_for_compilation(app_client)
+
+        resp = app_client.get("/api/compilations")
+        assert resp.status_code == 200
+        for entry in resp.json()["compilations"]:
+            assert isinstance(entry["clip_count"], int)
+            assert entry["clip_count"] == len(entry["clips"])
+
+    def test_list_compilations_backfills_missing_clip_count(
+        self, output_dir, app_client
+    ):
+        meta_dir = output_dir / "metadata"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        legacy = {
+            "compilation_id": "comp_legacy",
+            "filename": "comp_legacy.mp4",
+            "created_at": "2026-01-01T00:00:00",
+            "clips": [
+                {"video_stem": "legacy", "filename": "a.mp4", "duration": 1.0},
+                {"video_stem": "legacy", "filename": "b.mp4", "duration": 1.0},
+                {"video_stem": "legacy", "filename": "c.mp4", "duration": 1.0},
+            ],
+            "transition": "cut",
+            "total_duration": 3.0,
+            "status": "complete",
+        }
+        (meta_dir / "comp_legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+        resp = app_client.get("/api/compilations")
+        assert resp.status_code == 200
+        legacy_entry = next(
+            c for c in resp.json()["compilations"]
+            if c["compilation_id"] == "comp_legacy"
+        )
+        assert legacy_entry["clip_count"] == 3
+
 
 class TestCompilationServe:
     """GET /video/compilation/{filename} serves compilation video files."""

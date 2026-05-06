@@ -155,6 +155,7 @@ def create_router(state: AppState) -> APIRouter:
         for meta_path in sorted(meta_dir.glob("comp_*.json")):
             try:
                 data = json.loads(meta_path.read_text(encoding="utf-8"))
+                data.setdefault("clip_count", len(data.get("clips", [])))
                 if comp_dir.exists():
                     file_exists = (comp_dir / data.get("filename", "")).exists()
                 else:

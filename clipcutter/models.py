@@ -146,6 +146,7 @@ class CompilationMetadata:
             "filename": self.filename,
             "created_at": self.created_at,
             "clips": self.clips,
+            "clip_count": len(self.clips),
             "transition": self.transition,
             "total_duration": self.total_duration,
             "status": self.status,
