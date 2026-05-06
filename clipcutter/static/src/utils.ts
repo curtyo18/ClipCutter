@@ -40,3 +40,31 @@ export function formatClipTitle(filename: string): string {
   title = title.replace(/[_-]/g, ' ');
   return title.charAt(0).toUpperCase() + title.slice(1);
 }
+
+/** Show a fullscreen modal that plays the given video URL. Esc / backdrop click close. */
+export function openPreviewModal(url: string, _title?: string): void {
+  document.getElementById('clipPreviewModal')?.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'clipPreviewModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:1000;display:flex;align-items:center;justify-content:center';
+
+  const video = document.createElement('video');
+  video.src = url;
+  video.controls = true;
+  video.autoplay = true;
+  video.style.cssText = 'max-width:90vw;max-height:85vh';
+
+  modal.appendChild(video);
+  document.body.appendChild(modal);
+
+  const close = (): void => {
+    video.pause();
+    modal.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+
+  const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+}

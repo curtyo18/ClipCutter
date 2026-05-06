@@ -5,7 +5,7 @@ import {
   openKeptFolder, fetchStorageSummary, deleteEncodedClip, fetchSources, deleteSource,
 } from '../api';
 import type { KeptClipInfo, Playlist, StorageSummary, SourceVideo } from '../api';
-import { escapeHtml, fmtTime, formatClipTitle } from '../utils';
+import { escapeHtml, fmtTime, formatClipTitle, openPreviewModal } from '../utils';
 import { tasks } from '../tasks';
 import { renderCompilationList, loadPastCompilations } from './compile';
 
@@ -827,32 +827,9 @@ export async function deleteSourceFromExportHandler(videoStem: string, btn: HTML
 }
 
 export function previewClip(index: number): void {
-  document.getElementById('clipPreviewModal')?.remove();
   const clip = keptClips[index];
   const url = clip.encoded_video_url || clip.video_url;
-
-  const modal = document.createElement('div');
-  modal.id = 'clipPreviewModal';
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:1000;display:flex;align-items:center;justify-content:center';
-
-  const video = document.createElement('video');
-  video.src = url;
-  video.controls = true;
-  video.autoplay = true;
-  video.style.cssText = 'max-width:90vw;max-height:85vh';
-
-  modal.appendChild(video);
-  document.body.appendChild(modal);
-
-  const close = (): void => {
-    video.pause();
-    modal.remove();
-    document.removeEventListener('keydown', onKey);
-  };
-
-  const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close(); };
-  document.addEventListener('keydown', onKey);
-  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  openPreviewModal(url);
 }
 
 // ---- Helpers ----
