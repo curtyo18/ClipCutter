@@ -32,9 +32,12 @@ clipcutter/
   compiler.py   # Compilation builder: concat demuxer or xfade/acrossfade filter chains
   youtube.py    # YouTube Data API v3: OAuth2, upload, playlists
   reviewer.py   # Terminal-based keep/discard review
-  web.py        # FastAPI app: 36 endpoints (process, review, waveform, compile, encode, upload, OAuth)
-  static/
-    index.html  # SPA with Process + Review + Export tabs (dark theme, waveform canvas, compilation UI)
+  web.py        # FastAPI app entrypoint; mounts the routers below
+  state.py      # Thread-safe shared state (process / encode / upload / compile / keep)
+  routes/       # FastAPI routers split per domain: process, review, encode, compile, youtube
+  static/       # Vite + TypeScript SPA
+    index.html  # Shell loaded by FastAPI
+    src/        # TS source — tabs/{process,review,encode,compile}.ts + tasks.ts (chip/modal/toast) + waveform.ts + api.ts
 ```
 
 ## Output Structure
@@ -64,11 +67,11 @@ output/
 
 ## Testing
 
-34 tests: API tests (TestClient) + browser tests (Playwright/headless Chromium). Temp files cleaned up after each test. YouTube skipped (external dep).
+API tests (FastAPI `TestClient`) + browser tests (Playwright / headless Chromium). Temp files cleaned up after each test. YouTube tests skipped (external dep).
 
 ```bash
-pytest tests/ -v                    # Full suite (~42s)
-pytest tests/ -v -k "not browser"   # API-only (~6s, no Playwright needed)
+pytest tests/ -v                    # Full suite
+pytest tests/ -v -k "not browser"   # API-only (no Playwright needed)
 ```
 
 **Deps:** `pytest`, `httpx`, `playwright`, `pytest-playwright`. Setup: `python -m playwright install chromium`.
