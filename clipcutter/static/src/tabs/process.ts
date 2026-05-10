@@ -242,10 +242,14 @@ export async function startProcessingHandler(): Promise<void> {
           box.scrollTop = box.scrollHeight;
         }
       }
+      const pct = s.videos_total > 0
+        ? (s.videos_done / s.videos_total) * 100
+        : undefined;
       return {
         running: s.running,
+        pct,
         newLogLines: newLines,
-        subtitle: s.log[s.log.length - 1] ?? folder,
+        subtitle: s.current_video ?? folder,
         error: s.error,
       };
     },

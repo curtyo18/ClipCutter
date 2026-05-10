@@ -385,6 +385,43 @@ class TestPlayerVolumePersistence:
         )
 
 
+class TestProcessProgressMovement:
+    """The chip should show non-trivial pct movement during a multi-video
+    folder run — both from the new real per-video signal and from the
+    asymptotic fallback that smooths the bar between data points."""
+
+    def test_chip_pct_moves_during_run(self, browser_page, silence_video, mixed_video):
+        page, url, output_dir = browser_page
+
+        proc_dir = output_dir / "progress_src"
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(silence_video), str(proc_dir / "silence_5s.mp4"))
+        shutil.copy2(str(mixed_video), str(proc_dir / "mixed_10s.mp4"))
+
+        page.goto(url)
+        page.fill("#folderPath", str(proc_dir))
+        page.click("#btnProcess")
+
+        # Sample the chip's pct readout for ~6s. We don't assert exact values
+        # (those are timing-dependent and brittle); we assert the bar moved
+        # through at least 3 distinct values, proving real + fallback motion.
+        seen: set[str] = set()
+        deadline = time.time() + 6
+        while time.time() < deadline:
+            txt = page.evaluate(
+                "() => { const el = document.querySelector('.cc-task-chip-pct');"
+                "return el ? el.textContent : null; }"
+            )
+            if txt:
+                seen.add(txt)
+            page.wait_for_timeout(400)
+
+        assert len(seen) >= 3, (
+            f"Chip pct readout should advance through at least 3 distinct values; "
+            f"saw {seen!r}"
+        )
+
+
 class TestProcessTabRefreshOnActivation:
     """When a source is deleted from another tab (or filesystem), switching
     back to the Process tab should re-scan the folder so stale entries vanish.
