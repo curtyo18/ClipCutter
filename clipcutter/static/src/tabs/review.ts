@@ -1,6 +1,6 @@
 import { fetchClips, keepClip, fetchKeepStatus, discardClip, fetchSources, deleteSource } from '../api';
 import type { ClipInfo } from '../api';
-import { fmtTime, fmtTimePrecise, escapeHtml } from '../utils';
+import { fmtTime, fmtTimePrecise, escapeHtml, attachVolumePreference } from '../utils';
 import { loadWaveform, stopWaveformSync, updateWaveformTrimMarkers, REGION_COLORS, REGION_LABELS } from '../waveform';
 import { tasks } from '../tasks';
 
@@ -15,7 +15,6 @@ let results: Array<'kept' | 'discarded' | 'skipped' | null> = [];
 let segments: SegmentEntry[] = [];
 let activeSegmentIndex = 0;
 let queueOpen = true;
-export let savedVolume = 0.5;
 
 let reviewListenerAttached = false;
 
@@ -118,8 +117,6 @@ function showClip(): void {
       <div class="cc-review-main">
         <div class="cc-video">
           <video id="player" controls autoplay
-                 onvolumechange="window._savedVol=this.volume"
-                 onloadeddata="this.volume=window._savedVol||0.5"
                  style="width:100%;height:100%;object-fit:contain;background:#000">
             <source src="${clip.video_url}" type="video/mp4">
           </video>
@@ -180,6 +177,9 @@ function showClip(): void {
       </div>
     </div>
   `;
+
+  const playerEl = document.getElementById('player') as HTMLVideoElement | null;
+  if (playerEl) attachVolumePreference(playerEl);
 
   loadWaveform(clip.video_stem, clip.filename, clip.highlight_regions || []);
   renderSegments();

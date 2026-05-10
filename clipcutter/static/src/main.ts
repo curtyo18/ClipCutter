@@ -10,7 +10,6 @@ import { addSelectedToCompilation, removeCompClip, updateCompDuration, startComp
 declare global {
   interface Window {
     _cc: typeof handlers;
-    _savedVol: number;
   }
 }
 
@@ -55,7 +54,6 @@ const handlers = {
 };
 
 window._cc = handlers;
-window._savedVol = 0.5;
 
 let activeTab = 'process';
 
