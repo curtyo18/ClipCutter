@@ -57,6 +57,32 @@ class TestNoiseProducesClips:
         )
 
 
+class TestPerVideoProgressSignal:
+    """ProcessingState exposes per-video counters so the FE chip / modal can
+    show real progress through a multi-video folder run."""
+
+    def test_videos_total_and_done_count_through_run(
+        self, silence_video, mixed_video, output_dir, app_client,
+    ):
+        proc_dir = output_dir / "source"
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(silence_video), str(proc_dir / "silence_5s.mp4"))
+        shutil.copy2(str(mixed_video), str(proc_dir / "mixed_10s.mp4"))
+
+        resp = app_client.post("/api/process", json={
+            "folder": str(proc_dir),
+            "sensitivity": 1.0,
+        })
+        assert resp.status_code == 200
+
+        _wait_processing(app_client)
+
+        final = app_client.get("/api/process/status").json()
+        assert final["videos_total"] == 2
+        assert final["videos_done"] == 2
+        assert final["current_video"] is None
+
+
 class TestMixedVideoWorkflow:
     """Mixed video (silence-noise-silence) should detect the noisy section."""
 

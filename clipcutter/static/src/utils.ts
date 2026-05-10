@@ -41,6 +41,33 @@ export function formatClipTitle(filename: string): string {
   return title.charAt(0).toUpperCase() + title.slice(1);
 }
 
+/** Apply the user's saved volume / muted preference to a <video>, and write
+ *  back any subsequent change. Storage is best-effort — Safari private mode and
+ *  similar contexts throw on `localStorage`, so the read/write is wrapped. */
+export function attachVolumePreference(video: HTMLVideoElement): void {
+  const apply = (): void => {
+    try {
+      const rawVol = localStorage.getItem('cc.playerVolume');
+      const rawMuted = localStorage.getItem('cc.playerMuted');
+      let v = rawVol == null ? 0.5 : parseFloat(rawVol);
+      if (!isFinite(v)) v = 0.5;
+      v = Math.max(0, Math.min(1, v));
+      video.volume = v;
+      if (rawMuted != null) video.muted = rawMuted === 'true';
+    } catch { /* ignore */ }
+  };
+
+  if (video.readyState >= 1) apply();
+  video.addEventListener('loadeddata', apply);
+
+  video.addEventListener('volumechange', () => {
+    try {
+      localStorage.setItem('cc.playerVolume', String(video.volume));
+      localStorage.setItem('cc.playerMuted', String(video.muted));
+    } catch { /* ignore */ }
+  });
+}
+
 /** Show a fullscreen modal that plays the given video URL. Esc / backdrop click close. */
 export function openPreviewModal(url: string, _title?: string): void {
   document.getElementById('clipPreviewModal')?.remove();
@@ -54,6 +81,7 @@ export function openPreviewModal(url: string, _title?: string): void {
   video.controls = true;
   video.autoplay = true;
   video.style.cssText = 'max-width:90vw;max-height:85vh';
+  attachVolumePreference(video);
 
   modal.appendChild(video);
   document.body.appendChild(modal);

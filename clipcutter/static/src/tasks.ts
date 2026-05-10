@@ -64,10 +64,25 @@ const KIND_LABEL: Record<TaskKind, { running: string; done: string }> = {
   keep:    { running: 'Trimming',    done: 'Clip kept'        },
 };
 
+// Time-constant for the asymptotic-pct fallback. Larger values make the bar
+// creep more slowly; smaller makes it shoot toward 95% faster.
+const FALLBACK_TIME_CONSTANT_MS = 8000;
+const FALLBACK_CEILING = 95;
+
+interface FallbackBookkeeping {
+  /** Last pct that came from the runner (or our last extrapolated value). */
+  lastPct: number;
+  /** Timestamp of the last real pct from the runner. */
+  lastRealPctAt: number;
+  /** Whether we've ever received a real pct for this task. */
+  haveRealPct: boolean;
+}
+
 class TaskController extends EventTarget {
   private tasks = new Map<string, Task>();
   private runners = new Map<string, TaskRunner>();
   private timers = new Map<string, ReturnType<typeof setInterval>>();
+  private fallback = new Map<string, FallbackBookkeeping>();
   private nextId = 1;
 
   start(runner: TaskRunner): string {
@@ -87,6 +102,11 @@ class TaskController extends EventTarget {
     };
     this.tasks.set(id, task);
     this.runners.set(id, runner);
+    this.fallback.set(id, {
+      lastPct: 0,
+      lastRealPctAt: Date.now(),
+      haveRealPct: false,
+    });
     this.dispatchChanged();
 
     const tick = async (): Promise<void> => {
@@ -94,7 +114,24 @@ class TaskController extends EventTarget {
       if (!t || t.state !== 'running') return;
       try {
         const u = await runner.fetchStatus();
-        if (u.pct != null) t.pct = u.pct;
+        const fb = this.fallback.get(id);
+        if (u.pct != null) {
+          t.pct = u.pct;
+          if (fb) {
+            fb.lastPct = u.pct;
+            fb.lastRealPctAt = Date.now();
+            fb.haveRealPct = true;
+          }
+        } else if (fb) {
+          // No real pct this poll — extrapolate asymptotically toward the
+          // ceiling so the bar shows visible movement even between coarse
+          // data points (process: between videos, encode: within a clip,
+          // keep: no real pct at all).
+          const elapsed = Date.now() - fb.lastRealPctAt;
+          const target = fb.lastPct
+            + (FALLBACK_CEILING - fb.lastPct) * (1 - Math.exp(-elapsed / FALLBACK_TIME_CONSTANT_MS));
+          if (target > t.pct) t.pct = Math.min(FALLBACK_CEILING, target);
+        }
         if (u.subtitle != null) t.subtitle = u.subtitle;
         if (u.newLogLines && u.newLogLines.length) t.log = t.log.concat(u.newLogLines);
         if (!u.running) {
@@ -125,6 +162,7 @@ class TaskController extends EventTarget {
     }
     this.dispatchChanged();
     this.dispatchEvent(new CustomEvent('task-complete', { detail: { task: { ...t } } }));
+    this.fallback.delete(id);
     // Auto-clear from chip after a beat so it doesn't sit forever.
     setTimeout(() => {
       const cur = this.tasks.get(id);
@@ -147,6 +185,7 @@ class TaskController extends EventTarget {
     if (timer) { clearInterval(timer); this.timers.delete(id); }
     t.state = 'cancelled';
     t.finishedAt = Date.now();
+    this.fallback.delete(id);
     this.dispatchChanged();
     setTimeout(() => {
       this.tasks.delete(id);
@@ -173,6 +212,7 @@ class TaskController extends EventTarget {
       if (t.state === 'done' || t.state === 'error' || t.state === 'cancelled') {
         this.tasks.delete(id);
         this.runners.delete(id);
+        this.fallback.delete(id);
         removed = true;
       }
     }

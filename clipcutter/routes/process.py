@@ -56,6 +56,7 @@ def create_router(state: AppState, launch_cwd: str) -> APIRouter:
                     recursive=False,
                     dry_run=False,
                     overwrite=True,
+                    progress=state.proc,
                 )
                 state.proc.finish()
             except Exception as exc:

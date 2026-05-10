@@ -4,9 +4,12 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 import click
+
+if TYPE_CHECKING:
+    from clipcutter.state import ProcessingState
 
 from clipcutter.audio import check_ffmpeg, extract_audio, get_video_duration, NoAudioStreamError
 from clipcutter.clipper import (
@@ -136,8 +139,15 @@ def process_directory(input_dir: Path, output_dir: Path,
                       sensitivity: float = 1.0,
                       recursive: bool = False,
                       dry_run: bool = False,
-                      overwrite: bool = False) -> None:
-    """Process all video files in a directory."""
+                      overwrite: bool = False,
+                      progress: Optional["ProcessingState"] = None) -> None:
+    """Process all video files in a directory.
+
+    If `progress` is supplied, per-video counters are updated so the FE can
+    surface real progress on /api/process/status. The plumbing is an optional
+    parameter (rather than a callback) because the only consumer is the web
+    route, and threading the state object keeps the call site one line.
+    """
     input_dir = Path(input_dir).resolve()
 
     if recursive:
@@ -155,15 +165,26 @@ def process_directory(input_dir: Path, output_dir: Path,
 
     if not video_files:
         click.echo(f"No video files found in {input_dir}")
+        if progress is not None:
+            progress.set_total(0)
         return
+
+    if progress is not None:
+        progress.set_total(len(video_files))
 
     click.echo(f"Found {len(video_files)} video(s) to process.\n")
 
     total_clips = 0
     for i, video_path in enumerate(video_files, 1):
         click.echo(f"[{i}/{len(video_files)}] {video_path.name}")
-        clips = process_video(video_path, output_dir, sensitivity, dry_run, overwrite)
-        total_clips += len(clips)
+        if progress is not None:
+            progress.start_video(video_path.name)
+        try:
+            clips = process_video(video_path, output_dir, sensitivity, dry_run, overwrite)
+            total_clips += len(clips)
+        finally:
+            if progress is not None:
+                progress.finish_video()
         click.echo()
 
     click.echo(f"Done. {total_clips} clip(s) extracted from {len(video_files)} video(s).")

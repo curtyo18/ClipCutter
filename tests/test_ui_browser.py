@@ -318,6 +318,156 @@ class TestExportTabBrowser:
         assert "gif" in option_text
 
 
+class TestPlayerVolumePersistence:
+    """Volume slider should persist across reloads via localStorage and apply
+    to both the Review tab player and the inline preview modal."""
+
+    def test_review_player_reads_saved_volume(self, browser_page):
+        page, url, output_dir = browser_page
+
+        stem = "volclip"
+        clip = create_pending_clip(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/volclip.mp4",
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/volclip.mp4")
+
+        page.goto(url)
+        page.evaluate("localStorage.setItem('cc.playerVolume', '0.2')")
+        page.reload()
+        page.click('[data-tab="review"]')
+        page.wait_for_timeout(500)
+
+        page.wait_for_function(
+            """() => {
+                const v = document.getElementById('player');
+                return v && Math.abs(v.volume - 0.2) < 1e-3;
+            }""",
+            timeout=5000,
+        )
+
+    def test_preview_modal_uses_saved_volume(self, browser_page):
+        page, url, output_dir = browser_page
+
+        stem = "volpreview"
+        clip = create_pending_clip(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/volpreview.mp4",
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/volpreview.mp4")
+
+        # Mark the clip as kept so it shows up on the Export tab.
+        from starlette.testclient import TestClient
+        app = create_app(output_dir)
+        client = TestClient(app)
+        keep_and_wait(client, stem, "clip_001.mp4",
+                      json_body={"segments": [], "custom_name": None})
+
+        page.goto(url)
+        page.evaluate("localStorage.setItem('cc.playerVolume', '0.2')")
+        page.reload()
+        page.click('[data-tab="export"]')
+        page.wait_for_timeout(800)
+
+        # Open the inline preview modal by invoking the handler directly. The
+        # filename-click wiring is exercised elsewhere — here we're just
+        # verifying that the modal's <video> picks up the stored volume.
+        page.evaluate("window._cc.previewClip(0)")
+
+        page.wait_for_function(
+            """() => {
+                const m = document.getElementById('clipPreviewModal');
+                if (!m) return false;
+                const v = m.querySelector('video');
+                return v && Math.abs(v.volume - 0.2) < 1e-3;
+            }""",
+            timeout=5000,
+        )
+
+
+class TestProcessProgressMovement:
+    """The chip should show non-trivial pct movement during a multi-video
+    folder run — both from the new real per-video signal and from the
+    asymptotic fallback that smooths the bar between data points."""
+
+    def test_chip_pct_moves_during_run(self, browser_page, silence_video, mixed_video):
+        page, url, output_dir = browser_page
+
+        proc_dir = output_dir / "progress_src"
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(silence_video), str(proc_dir / "silence_5s.mp4"))
+        shutil.copy2(str(mixed_video), str(proc_dir / "mixed_10s.mp4"))
+
+        page.goto(url)
+        page.fill("#folderPath", str(proc_dir))
+        page.click("#btnProcess")
+
+        # Sample the chip's pct readout for ~6s. We don't assert exact values
+        # (those are timing-dependent and brittle); we assert the bar moved
+        # through at least 3 distinct values, proving real + fallback motion.
+        seen: set[str] = set()
+        deadline = time.time() + 6
+        while time.time() < deadline:
+            txt = page.evaluate(
+                "() => { const el = document.querySelector('.cc-task-chip-pct');"
+                "return el ? el.textContent : null; }"
+            )
+            if txt:
+                seen.add(txt)
+            page.wait_for_timeout(400)
+
+        assert len(seen) >= 3, (
+            f"Chip pct readout should advance through at least 3 distinct values; "
+            f"saw {seen!r}"
+        )
+
+
+class TestProcessTabRefreshOnActivation:
+    """When a source is deleted from another tab (or filesystem), switching
+    back to the Process tab should re-scan the folder so stale entries vanish.
+    """
+
+    def test_process_rescans_when_tab_activated(self, browser_page, silence_video):
+        page, url, output_dir = browser_page
+
+        proc_dir = output_dir / "rescan_src"
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        target = proc_dir / "to_be_deleted.mp4"
+        shutil.copy2(str(silence_video), str(target))
+
+        page.goto(url)
+        page.fill("#folderPath", str(proc_dir))
+        page.click("#btnScan")
+
+        # Wait for the row to appear in the table after the initial scan.
+        page.wait_for_function(
+            """name => {
+                const sec = document.getElementById('videosInFolderSection');
+                return sec && sec.innerText.includes(name);
+            }""",
+            arg="to_be_deleted.mp4",
+            timeout=5000,
+        )
+
+        # Simulate the cross-tab delete by removing the file from disk.
+        # The Process tab must re-scan when re-activated and drop the stale row.
+        target.unlink()
+
+        page.click('[data-tab="review"]')
+        page.wait_for_timeout(200)
+        page.click('[data-tab="process"]')
+
+        # The deleted filename should disappear from the videos-in-folder table.
+        page.wait_for_function(
+            """name => {
+                const sec = document.getElementById('videosInFolderSection');
+                return sec && !sec.innerText.includes(name);
+            }""",
+            arg="to_be_deleted.mp4",
+            timeout=5000,
+        )
+
+
 class TestFullBrowserWorkflow:
     """Scenario 1 end-to-end via browser: process -> review -> keep -> export."""
 
