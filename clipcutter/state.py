@@ -14,6 +14,9 @@ class ProcessingState:
         self.running = False
         self.log_lines: list[str] = []
         self.error: Optional[str] = None
+        self.videos_total: int = 0
+        self.videos_done: int = 0
+        self.current_video: Optional[str] = None
         self._lock = threading.Lock()
 
     def reset(self):
@@ -21,10 +24,26 @@ class ProcessingState:
             self.running = True
             self.log_lines = []
             self.error = None
+            self.videos_total = 0
+            self.videos_done = 0
+            self.current_video = None
 
     def add_line(self, line: str):
         with self._lock:
             self.log_lines.append(line)
+
+    def set_total(self, n: int):
+        with self._lock:
+            self.videos_total = n
+
+    def start_video(self, name: str):
+        with self._lock:
+            self.current_video = name
+
+    def finish_video(self):
+        with self._lock:
+            self.videos_done += 1
+            self.current_video = None
 
     def finish(self, error: Optional[str] = None):
         with self._lock:
@@ -33,7 +52,14 @@ class ProcessingState:
 
     def snapshot(self) -> dict:
         with self._lock:
-            return {"running": self.running, "log": list(self.log_lines), "error": self.error}
+            return {
+                "running": self.running,
+                "log": list(self.log_lines),
+                "error": self.error,
+                "videos_total": self.videos_total,
+                "videos_done": self.videos_done,
+                "current_video": self.current_video,
+            }
 
 
 class LogWriter:

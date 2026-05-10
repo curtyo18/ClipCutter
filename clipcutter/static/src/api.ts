@@ -85,6 +85,9 @@ export interface ProcessStatus {
   running: boolean;
   log: string[];
   error: string | null;
+  videos_total: number;
+  videos_done: number;
+  current_video: string | null;
 }
 
 export interface EncodeStatus {
