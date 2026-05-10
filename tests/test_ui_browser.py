@@ -318,6 +318,52 @@ class TestExportTabBrowser:
         assert "gif" in option_text
 
 
+class TestProcessTabRefreshOnActivation:
+    """When a source is deleted from another tab (or filesystem), switching
+    back to the Process tab should re-scan the folder so stale entries vanish.
+    """
+
+    def test_process_rescans_when_tab_activated(self, browser_page, silence_video):
+        page, url, output_dir = browser_page
+
+        proc_dir = output_dir / "rescan_src"
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        target = proc_dir / "to_be_deleted.mp4"
+        shutil.copy2(str(silence_video), str(target))
+
+        page.goto(url)
+        page.fill("#folderPath", str(proc_dir))
+        page.click("#btnScan")
+
+        # Wait for the row to appear in the table after the initial scan.
+        page.wait_for_function(
+            """name => {
+                const sec = document.getElementById('videosInFolderSection');
+                return sec && sec.innerText.includes(name);
+            }""",
+            arg="to_be_deleted.mp4",
+            timeout=5000,
+        )
+
+        # Simulate the cross-tab delete by removing the file from disk.
+        # The Process tab must re-scan when re-activated and drop the stale row.
+        target.unlink()
+
+        page.click('[data-tab="review"]')
+        page.wait_for_timeout(200)
+        page.click('[data-tab="process"]')
+
+        # The deleted filename should disappear from the videos-in-folder table.
+        page.wait_for_function(
+            """name => {
+                const sec = document.getElementById('videosInFolderSection');
+                return sec && !sec.innerText.includes(name);
+            }""",
+            arg="to_be_deleted.mp4",
+            timeout=5000,
+        )
+
+
 class TestFullBrowserWorkflow:
     """Scenario 1 end-to-end via browser: process -> review -> keep -> export."""
 

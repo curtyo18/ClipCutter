@@ -74,6 +74,7 @@ function switchTab(tab: string): void {
   document.getElementById('view-' + tab)?.classList.add('active');
 
   if (tab !== 'review') stopWaveformSync();
+  if (tab === 'process') scanCurrentFolder();
   if (tab === 'review') loadClips();
   if (tab === 'export') loadExportTab();
 }
