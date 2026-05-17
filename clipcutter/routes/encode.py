@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -21,7 +20,7 @@ from clipcutter.metadata import (
     load_metadata, load_metadata_dict, update_clip_encoding,
     update_clip_status, clear_clip_encoding,
 )
-from clipcutter.routes._helpers import _media_type, _safe_join, _sanitize_filename
+from clipcutter.routes._helpers import _safe_join, _sanitize_filename
 from clipcutter.state import AppState
 
 
@@ -98,7 +97,7 @@ def create_router(state: AppState) -> APIRouter:
                     "duration": clip.duration,
                     "detection_reasons": clip.detection_reasons,
                     "confidence": clip.confidence,
-                    "video_url": f"/video/{video_stem}/{clip.filename}",
+                    "video_url": f"/video/kept/{video_stem}/{clip.filename}",
                     "clipped_at": clipped_at,
                     "custom_name": clip.custom_name,
                     "encoded_filename": clip.encoded_filename,
@@ -293,14 +292,6 @@ def create_router(state: AppState) -> APIRouter:
             except Exception:
                 pass
         return {"status": "cancelling"}
-
-    @router.get("/video/encoded/{video_stem}/{filename}")
-    def serve_encoded_video(video_stem: str, filename: str):
-        encoded_base = state.output_dir / DIR_CLIPS / DIR_ENCODED
-        clip_path = _safe_join(encoded_base, video_stem, filename)
-        if not clip_path.exists():
-            raise HTTPException(404, "Encoded clip not found")
-        return FileResponse(clip_path, media_type=_media_type(filename))
 
     @router.delete("/api/kept/{video_stem}/{filename}")
     def delete_kept_clip(video_stem: str, filename: str):

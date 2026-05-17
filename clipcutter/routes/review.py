@@ -18,6 +18,15 @@ from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_c
 from clipcutter.routes._helpers import _media_type, _safe_join
 from clipcutter.state import AppState
 
+# Canonical set of subdirectories the /video/{kind}/... route may serve from.
+# A request whose `kind` is outside this set is rejected with 400 — never
+# silently falls through to another kind.
+_VIDEO_KIND_DIRS: dict[str, str] = {
+    "pending": DIR_PENDING,
+    "kept": DIR_KEPT,
+    "encoded": DIR_ENCODED,
+}
+
 # Wall-clock ceiling on a single keep-path ffmpeg invocation. A keep is
 # essentially a one-off trim/encode so the same 10-minute ceiling as the
 # encode worker (clipcutter.encoder.FFMPEG_ENCODE_TIMEOUT) is the right
@@ -302,7 +311,7 @@ def create_router(state: AppState) -> APIRouter:
                     "duration": clip.duration,
                     "detection_reasons": clip.detection_reasons,
                     "confidence": clip.confidence,
-                    "video_url": f"/video/{video_stem}/{clip.filename}",
+                    "video_url": f"/video/pending/{video_stem}/{clip.filename}",
                     "highlight_regions": clip.highlight_regions or [],
                     "processed_at": meta_data.get("processed_at", ""),
                 })
@@ -310,16 +319,22 @@ def create_router(state: AppState) -> APIRouter:
         clips.sort(key=lambda c: (c["processed_at"], c["confidence"]), reverse=True)
         return {"clips": clips, "total": len(clips)}
 
-    @router.get("/video/{video_stem}/{filename}")
-    def serve_video(video_stem: str, filename: str):
-        pending_base = state.output_dir / DIR_CLIPS / DIR_PENDING
-        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
-        encoded_base = state.output_dir / DIR_CLIPS / DIR_ENCODED
-        clip_path = _safe_join(pending_base, video_stem, filename)
-        if not clip_path.exists():
-            clip_path = _safe_join(kept_base, video_stem, filename)
-        if not clip_path.exists():
-            clip_path = _safe_join(encoded_base, video_stem, filename)
+    @router.get("/video/{kind}/{video_stem}/{filename}")
+    def serve_video(kind: str, video_stem: str, filename: str):
+        """Serve a clip from exactly one of pending/kept/encoded.
+
+        Replaces the older silent-fallback behaviour: each caller now
+        states which lifecycle stage it wants and gets exactly that file
+        or a 404 — never the wrong file because a stale copy still
+        exists in another stage. `kind` is validated against an explicit
+        whitelist (NOT a FastAPI Literal alone — FastAPI doesn't enforce
+        Literal path-param values without extra plumbing, so the explicit
+        membership check is what actually rejects bad values).
+        """
+        if kind not in _VIDEO_KIND_DIRS:
+            raise HTTPException(400, f"Invalid kind: {kind!r}")
+        base = state.output_dir / DIR_CLIPS / _VIDEO_KIND_DIRS[kind]
+        clip_path = _safe_join(base, video_stem, filename)
         if not clip_path.exists():
             raise HTTPException(404, "Clip not found")
         return FileResponse(clip_path, media_type=_media_type(filename))
