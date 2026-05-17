@@ -15,6 +15,8 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 from clipcutter.config import DIR_CLIPS, DIR_COMPILATIONS, DIR_ENCODED, DIR_KEPT, DIR_METADATA
+from clipcutter.encoder import FFMPEG_ENCODE_TIMEOUT
+from clipcutter.errors import FFmpegTimeoutError
 from clipcutter.metadata import (
     load_metadata, load_metadata_dict, update_clip_encoding,
     update_clip_status, clear_clip_encoding,
@@ -202,20 +204,29 @@ def create_router(state: AppState) -> APIRouter:
                         )
                         state.enc.set_popen(proc)
                         try:
-                            # Sentinel timeout — Task 11 will replace this
-                            # with a duration-aware value. For now: cap at
-                            # 1 hour so a hung encode can't pin the worker
-                            # forever, even if cancel isn't pressed.
+                            # Flat ceiling matches encoder.FFMPEG_ENCODE_TIMEOUT.
+                            # A hung encode can't pin the worker forever, even
+                            # if the user never hits cancel. On timeout the
+                            # error is caught per-clip below so the batch can
+                            # advance to the next file.
                             try:
-                                _stdout, stderr = proc.communicate(timeout=3600)
+                                _stdout, stderr = proc.communicate(
+                                    timeout=FFMPEG_ENCODE_TIMEOUT,
+                                )
                             except subprocess.TimeoutExpired:
                                 proc.kill()
                                 try:
                                     _stdout, stderr = proc.communicate(timeout=5)
                                 except Exception:
                                     stderr = ""
-                                raise RuntimeError(
-                                    f"FFmpeg encoding timed out for {clip_ref.filename}"
+                                if output_path.exists():
+                                    try:
+                                        output_path.unlink()
+                                    except OSError:
+                                        pass
+                                raise FFmpegTimeoutError(
+                                    f"FFmpeg encoding timed out after "
+                                    f"{FFMPEG_ENCODE_TIMEOUT}s for {clip_ref.filename}"
                                 )
                         finally:
                             state.enc.set_popen(None)

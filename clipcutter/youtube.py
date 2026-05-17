@@ -19,6 +19,12 @@ YOUTUBE_HTTP_TIMEOUT_SECONDS = 120
 # but eventually gives up so cancellation can take effect.
 YOUTUBE_CHUNK_RETRIES = 3
 
+# Timeout for one-shot OAuth token endpoint calls. A wedged Google
+# token endpoint must not pin a FastAPI request thread (the OAuth
+# callback is synchronous), so cap each request well below the default
+# Uvicorn/HTTP read timeout.
+OAUTH_HTTP_TIMEOUT_SECONDS = 30
+
 
 @dataclass
 class YouTubeCredentials:
@@ -72,6 +78,7 @@ def exchange_code(code: str, client_id: str, client_secret: str,
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         },
+        timeout=OAUTH_HTTP_TIMEOUT_SECONDS,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -97,6 +104,7 @@ def refresh_access_token(creds: YouTubeCredentials) -> YouTubeCredentials:
             "refresh_token": creds.refresh_token,
             "grant_type": "refresh_token",
         },
+        timeout=OAUTH_HTTP_TIMEOUT_SECONDS,
     )
     resp.raise_for_status()
     data = resp.json()

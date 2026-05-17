@@ -6,6 +6,13 @@ from pathlib import Path
 from typing import List
 
 from clipcutter.audio import get_video_duration
+from clipcutter.errors import FFmpegTimeoutError
+
+# Flat 30-minute ceiling for the whole compilation render. Compilations
+# fan in many inputs and re-encode video+audio so they're meaningfully
+# slower than a single-clip encode; 30 min covers comfortably-sized
+# montages while still surfacing a hang within a reasonable wait.
+FFMPEG_COMPILE_TIMEOUT = 1800
 
 
 def build_compilation(
@@ -64,7 +71,16 @@ def _build_concat(
             "-c:a", "aac", "-b:a", "192k",
             str(output_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=FFMPEG_COMPILE_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise FFmpegTimeoutError(
+                f"FFmpeg concat timed out after {FFMPEG_COMPILE_TIMEOUT}s "
+                f"building compilation"
+            ) from exc
         if result.returncode != 0:
             raise RuntimeError(
                 f"FFmpeg concat failed: {result.stderr[-500:]}"
@@ -128,7 +144,16 @@ def _build_crossfade(
         str(output_path),
     ])
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=FFMPEG_COMPILE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise FFmpegTimeoutError(
+            f"FFmpeg crossfade timed out after {FFMPEG_COMPILE_TIMEOUT}s "
+            f"building compilation"
+        ) from exc
     if result.returncode != 0:
         raise RuntimeError(
             f"FFmpeg crossfade failed: {result.stderr[-500:]}"

@@ -7,6 +7,13 @@ from pathlib import Path
 from typing import List, Optional
 
 from clipcutter import config
+from clipcutter.errors import FFmpegTimeoutError
+
+# Flat 10-minute ceiling on a single encode_clip() call. The encode
+# worker in routes/encode.py has its own (matching) Popen-based ceiling
+# so its cancel logic stays in charge; this constant just protects
+# ad-hoc callers (tests, CLI experiments) from hangs on corrupt input.
+FFMPEG_ENCODE_TIMEOUT = 600
 
 
 @dataclass
@@ -113,7 +120,19 @@ def encode_clip(input_path: Path, output_path: Path,
         return output_path
 
     try:
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(
+            cmd, capture_output=True, text=True, check=True,
+            timeout=FFMPEG_ENCODE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except OSError:
+                pass
+        raise FFmpegTimeoutError(
+            f"FFmpeg encoding timed out after {FFMPEG_ENCODE_TIMEOUT}s for {input_path.name}"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         # Clean up partial output file
         if output_path.exists():
