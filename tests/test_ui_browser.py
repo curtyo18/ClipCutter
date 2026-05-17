@@ -416,19 +416,25 @@ class TestProcessProgressMovement:
                 window.__maxChipPct = 0;
                 window.__chipReachedTerminal = false;
                 const sample = () => {
-                    const el = document.querySelector('.cc-task-chip-pct');
-                    if (!el) return;
-                    const text = el.textContent || '';
-                    const m = /(\\d+)\\s*%/.exec(text);
-                    if (m) {
-                        const v = parseInt(m[1], 10);
-                        if (v > window.__maxChipPct) window.__maxChipPct = v;
-                    } else if (/done|error/i.test(text)) {
+                    const pct = document.querySelector('.cc-task-chip-pct');
+                    if (pct) {
+                        const m = /(\\d+)\\s*%/.exec(pct.textContent || '');
+                        if (m) {
+                            const v = parseInt(m[1], 10);
+                            if (v > window.__maxChipPct) window.__maxChipPct = v;
+                        }
+                    }
+                    // On task completion the chip is re-rendered without the
+                    // pct span; the parent gains data-state="done"|"error".
+                    if (document.querySelector(
+                        '.cc-task-chip[data-state="done"], .cc-task-chip[data-state="error"]'
+                    )) {
                         window.__chipReachedTerminal = true;
                     }
                 };
                 new MutationObserver(sample).observe(document.body, {
-                    childList: true, subtree: true, characterData: true,
+                    childList: true, subtree: true, attributes: true,
+                    attributeFilter: ['data-state'], characterData: true,
                 });
             }"""
         )
