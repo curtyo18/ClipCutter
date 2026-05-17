@@ -166,6 +166,21 @@ class TestFolderScan:
         assert len(data["videos"]) == 1
         assert data["videos"][0]["filename"] == "game.mp4"
 
+    def test_extended_video_extensions_included(self, output_dir, app_client, tmp_path):
+        """flv/wmv/m4v are valid pipeline inputs and must show up in the
+        folder picker. Guards against a stale local allow-list drifting from
+        clipcutter.config.VIDEO_EXTENSIONS.
+        """
+        (tmp_path / "old.flv").write_bytes(b"\x00" * 512)
+        (tmp_path / "old.wmv").write_bytes(b"\x00" * 512)
+        (tmp_path / "old.m4v").write_bytes(b"\x00" * 512)
+        (tmp_path / "new.mp4").write_bytes(b"\x00" * 512)
+
+        resp = app_client.get(f"/api/folder-scan?folder={tmp_path}")
+        assert resp.status_code == 200
+        names = {v["filename"] for v in resp.json()["videos"]}
+        assert names == {"old.flv", "old.wmv", "old.m4v", "new.mp4"}
+
     def test_processed_video_has_processed_status(self, output_dir, app_client, tmp_path):
         from tests.conftest import save_test_metadata
         from clipcutter.models import ClipMetadata

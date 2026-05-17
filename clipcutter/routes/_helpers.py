@@ -12,7 +12,7 @@ def _sanitize_filename(name: str) -> str:
 
 def _media_type(filename: str) -> str:
     ext = Path(filename).suffix.lower()
-    return {"webm": "video/webm", ".gif": "image/gif"}.get(ext, "video/mp4")
+    return {".webm": "video/webm", ".gif": "image/gif"}.get(ext, "video/mp4")
 
 
 def _safe_join(base: Path, *parts: str) -> Path:
