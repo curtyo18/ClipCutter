@@ -196,8 +196,10 @@ export async function cancelCompilationHandler(): Promise<void> {
   }
 }
 
-export async function deleteCompilationSourcesHandler(compId: string, clipCount: number): Promise<void> {
-  if (!confirm(`Delete the ${clipCount} source clip(s) used in this compilation? This cannot be undone.`)) return;
+export async function deleteCompilationSourcesHandler(compId: string | undefined, clipCount: string | number | undefined): Promise<void> {
+  if (!compId) return;
+  const count = typeof clipCount === 'string' ? parseInt(clipCount, 10) : (clipCount ?? 0);
+  if (!confirm(`Delete the ${count} source clip(s) used in this compilation? This cannot be undone.`)) return;
   try {
     const data = await deleteCompilationSources(compId);
     alert(`Deleted ${data.deleted_count} clip file(s).`);
@@ -222,11 +224,14 @@ export async function loadPastCompilations(): Promise<void> {
           <span class="cc-num cc-dim">${comp.clip_count} clips</span>
           <span class="cc-num cc-dim">${dur}</span>
           <button class="cc-btn" data-variant="ghost" data-size="sm"
-                  onclick="window._cc.previewCompilation('${escapeHtml(comp.filename)}')">▶ Play</button>
+                  data-filename="${escapeHtml(comp.filename)}"
+                  onclick="window._cc.previewCompilation(this.dataset.filename)">▶ Play</button>
           <button class="cc-btn" data-variant="ghost" data-size="sm"
-                  onclick="window._cc.deleteCompilationSourcesHandler('${escapeHtml(comp.compilation_id)}', ${comp.clip_count})">Clean up clips</button>
+                  data-comp-id="${escapeHtml(comp.compilation_id)}" data-clip-count="${comp.clip_count}"
+                  onclick="window._cc.deleteCompilationSourcesHandler(this.dataset.compId, this.dataset.clipCount)">Clean up clips</button>
           <button class="cc-btn" data-variant="danger" data-size="sm"
-                  onclick="window._cc.deleteCompilationHandler('${escapeHtml(comp.compilation_id)}')">×</button>
+                  data-comp-id="${escapeHtml(comp.compilation_id)}"
+                  onclick="window._cc.deleteCompilationHandler(this.dataset.compId)">×</button>
         </div>
       `;
     }).join('');
@@ -237,11 +242,13 @@ export async function loadPastCompilations(): Promise<void> {
   } catch (e) { console.error('Failed to load compilations:', e); }
 }
 
-export function previewCompilation(filename: string): void {
+export function previewCompilation(filename: string | undefined): void {
+  if (!filename) return;
   openPreviewModal('/video/compilation/' + encodeURIComponent(filename));
 }
 
-export async function deleteCompilationHandler(compId: string): Promise<void> {
+export async function deleteCompilationHandler(compId: string | undefined): Promise<void> {
+  if (!compId) return;
   if (!confirm('Delete this compilation?')) return;
   try {
     await deleteCompilation(compId);

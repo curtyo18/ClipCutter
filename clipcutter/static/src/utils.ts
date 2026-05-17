@@ -22,11 +22,17 @@ export function parseTrimTime(str: string): number {
   return parseFloat(str) || 0;
 }
 
-/** Escape HTML special characters */
+/** Escape HTML special characters — safe for both text and attribute contexts.
+ *  The textContent/innerHTML round-trip only escapes & < > and silently leaves
+ *  " and ' alone, which breaks out of attribute boundaries. Explicit replace
+ *  chain covers the full 5-char set. */
 export function escapeHtml(text: string): string {
-  const d = document.createElement('div');
-  d.textContent = text;
-  return d.innerHTML;
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /** Convert display name to safe filename stem */
