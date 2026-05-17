@@ -166,11 +166,11 @@ def _do_keep(
     )
 
     if is_full_clip:
-        # Pure file copy — no subprocess to cancel.
-        try:
-            shutil.copy2(str(clip_path), str(dest))
-        except OSError:
-            pass
+        # Pure file copy — no subprocess to cancel. Let OSError propagate
+        # so the worker's outer except records it as a task error;
+        # swallowing here would report success while no file landed in
+        # clips/kept/.
+        shutil.copy2(str(clip_path), str(dest))
         return False
 
     if len(segments) == 1:

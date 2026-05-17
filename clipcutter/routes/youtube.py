@@ -210,7 +210,7 @@ def create_router(state: AppState) -> APIRouter:
             )
             save_credentials(creds, creds_path)
         except Exception as exc:
-            raise HTTPException(500, f"Token exchange failed: {exc}")
+            raise HTTPException(500, f"Token exchange failed: {exc}") from exc
 
         return HTMLResponse("""
 <!DOCTYPE html>
@@ -249,7 +249,7 @@ if (window.opener) {
             playlists = list_playlists(creds)
             return {"playlists": playlists}
         except Exception as exc:
-            raise HTTPException(500, f"Failed to list playlists: {exc}")
+            raise HTTPException(500, f"Failed to list playlists: {exc}") from exc
 
     @router.post("/api/youtube/playlists")
     def youtube_create_playlist(req: PlaylistCreateRequest):
@@ -262,7 +262,7 @@ if (window.opener) {
             playlist = create_playlist(creds, req.title, req.privacy)
             return playlist
         except Exception as exc:
-            raise HTTPException(500, f"Failed to create playlist: {exc}")
+            raise HTTPException(500, f"Failed to create playlist: {exc}") from exc
 
     @router.post("/api/youtube/upload")
     def start_youtube_upload(req: YouTubeBatchUploadRequest):
@@ -386,8 +386,15 @@ if (window.opener) {
                     if clip_req.playlist_id and result.video_id:
                         try:
                             add_to_playlist(current_creds, clip_req.playlist_id, result.video_id)
-                        except Exception:
-                            pass  # Non-fatal: upload succeeded
+                        except Exception as exc:
+                            # Non-fatal: upload succeeded. Log so the user
+                            # can see why a clip didn't land in the
+                            # selected playlist instead of silently
+                            # losing the signal.
+                            logger.warning(
+                                "add_to_playlist failed for video %s in playlist %s: %s",
+                                result.video_id, clip_req.playlist_id, exc,
+                            )
                 elif result.cancelled:
                     # Don't write to errors[] or stamp the metadata with
                     # a "failed" status: the user asked to stop, the

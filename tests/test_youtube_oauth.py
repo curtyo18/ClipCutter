@@ -600,6 +600,194 @@ class TestUploadResultPermanentField:
         assert result.permanent is False
 
 
+# ===========================================================================
+# Sub-change 6: add_to_playlist failure after a successful upload is logged
+# ===========================================================================
+
+class TestAddToPlaylistFailureLogsWarning:
+    """When the upload succeeds but the follow-up add_to_playlist call
+    fails (network blip, permission, deleted playlist), the failure must
+    be visible — previously the catch was silent so the user had no clue
+    why their clip didn't land in the requested playlist. The overall
+    upload result is still "success" (non-fatal), but a logger.warning
+    has to fire."""
+
+    def test_playlist_add_failure_emits_warning(
+        self, output_dir, app_client, caplog,
+    ):
+        import json
+        import logging
+        import time
+        from clipcutter.config import YOUTUBE_CREDENTIALS_FILE
+
+        # 1) Seed creds so the upload route doesn't 401.
+        creds_path = output_dir / YOUTUBE_CREDENTIALS_FILE
+        creds_path.parent.mkdir(parents=True, exist_ok=True)
+        creds_path.write_text(json.dumps({
+            "access_token": "a", "refresh_token": "r", "token_expiry": None,
+            "client_id": "cid", "client_secret": "csec",
+        }), encoding="utf-8")
+
+        # 2) Seed a kept clip + metadata so the worker has something to upload.
+        stem = "playlistfail"
+        filename = "clip_001.mp4"
+        kept_dir = output_dir / "clips" / "kept" / stem
+        kept_dir.mkdir(parents=True, exist_ok=True)
+        (kept_dir / filename).write_bytes(b"stub-kept-bytes")
+        meta_dir = output_dir / "metadata"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / f"{stem}_clips.json").write_text(json.dumps({
+            "source_video": f"/fake/{stem}.mp4",
+            "processed_at": "2026-01-01T00:00:00",
+            "clip_count": 1,
+            "clips": [{
+                "filename": filename,
+                "source_video": f"/fake/{stem}.mp4",
+                "start_time": 0.0, "end_time": 5.0, "duration": 5.0,
+                "detection_reasons": ["volume_spike"], "confidence": 0.8,
+                "status": "kept",
+            }],
+        }), encoding="utf-8")
+
+        # 3) Patch upload_video to return success, add_to_playlist to raise.
+        def fake_upload_video(
+            *, creds, file_path, title, description, tags, category_id,
+            privacy, progress_callback=None, cancel_event=None,
+            creds_path=None,
+        ):
+            return UploadResult(
+                success=True, video_id="VID123",
+                url="https://www.youtube.com/watch?v=VID123",
+            )
+
+        def fake_add_to_playlist(creds, playlist_id, video_id):
+            raise RuntimeError("playlist insert blew up")
+
+        with caplog.at_level(logging.WARNING, logger="clipcutter.routes.youtube"):
+            with patch(
+                "clipcutter.youtube.upload_video", side_effect=fake_upload_video,
+            ), patch(
+                "clipcutter.youtube.add_to_playlist",
+                side_effect=fake_add_to_playlist,
+            ):
+                resp = app_client.post("/api/youtube/upload", json={
+                    "clips": [{
+                        "video_stem": stem,
+                        "filename": filename,
+                        "use_encoded": False,
+                        "title": "Test", "description": "", "tags": [],
+                        "category_id": "20", "privacy": "private",
+                        "playlist_id": "PL_FAKE",
+                    }],
+                })
+                assert resp.status_code == 200, resp.text
+
+                # Wait for the worker thread to finish.
+                state = _recover_app_state(app_client.app)
+                deadline = time.time() + 5.0
+                while state.upl.snapshot()["running"] and time.time() < deadline:
+                    time.sleep(0.02)
+
+        snap = state.upl.snapshot()
+        # Upload itself still succeeded — playlist-add failure is non-fatal.
+        assert snap["running"] is False
+        assert len(snap["completed"]) == 1
+        assert snap["completed"][0]["video_id"] == "VID123"
+        assert snap["errors"] == []
+
+        # A WARNING-level log line on the routes.youtube logger must
+        # mention the failure so the user can see it in the server log.
+        warnings = [
+            r for r in caplog.records
+            if r.levelno >= logging.WARNING
+            and r.name == "clipcutter.routes.youtube"
+        ]
+        assert warnings, (
+            "Expected at least one WARNING on clipcutter.routes.youtube; "
+            f"got: {[(r.name, r.levelname, r.getMessage()) for r in caplog.records]}"
+        )
+        msgs = " ".join(r.getMessage() for r in warnings)
+        assert "playlist" in msgs.lower()
+        assert "playlist insert blew up" in msgs
+
+    def test_playlist_add_success_emits_no_warning(
+        self, output_dir, app_client, caplog,
+    ):
+        """Sanity: when add_to_playlist succeeds, no warning is logged —
+        the warning is reserved for the actual failure path."""
+        import json
+        import logging
+        import time
+        from clipcutter.config import YOUTUBE_CREDENTIALS_FILE
+
+        creds_path = output_dir / YOUTUBE_CREDENTIALS_FILE
+        creds_path.parent.mkdir(parents=True, exist_ok=True)
+        creds_path.write_text(json.dumps({
+            "access_token": "a", "refresh_token": "r", "token_expiry": None,
+            "client_id": "cid", "client_secret": "csec",
+        }), encoding="utf-8")
+
+        stem = "playlistok"
+        filename = "clip_001.mp4"
+        kept_dir = output_dir / "clips" / "kept" / stem
+        kept_dir.mkdir(parents=True, exist_ok=True)
+        (kept_dir / filename).write_bytes(b"stub-kept-bytes")
+        meta_dir = output_dir / "metadata"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / f"{stem}_clips.json").write_text(json.dumps({
+            "source_video": f"/fake/{stem}.mp4",
+            "processed_at": "2026-01-01T00:00:00",
+            "clip_count": 1,
+            "clips": [{
+                "filename": filename,
+                "source_video": f"/fake/{stem}.mp4",
+                "start_time": 0.0, "end_time": 5.0, "duration": 5.0,
+                "detection_reasons": ["volume_spike"], "confidence": 0.8,
+                "status": "kept",
+            }],
+        }), encoding="utf-8")
+
+        def fake_upload_video(**kwargs):
+            return UploadResult(
+                success=True, video_id="VID456",
+                url="https://www.youtube.com/watch?v=VID456",
+            )
+
+        with caplog.at_level(logging.WARNING, logger="clipcutter.routes.youtube"):
+            with patch(
+                "clipcutter.youtube.upload_video", side_effect=fake_upload_video,
+            ), patch(
+                "clipcutter.youtube.add_to_playlist", return_value=None,
+            ):
+                resp = app_client.post("/api/youtube/upload", json={
+                    "clips": [{
+                        "video_stem": stem,
+                        "filename": filename,
+                        "use_encoded": False,
+                        "title": "Test", "description": "", "tags": [],
+                        "category_id": "20", "privacy": "private",
+                        "playlist_id": "PL_OK",
+                    }],
+                })
+                assert resp.status_code == 200, resp.text
+
+                state = _recover_app_state(app_client.app)
+                deadline = time.time() + 5.0
+                while state.upl.snapshot()["running"] and time.time() < deadline:
+                    time.sleep(0.02)
+
+        warnings = [
+            r for r in caplog.records
+            if r.levelno >= logging.WARNING
+            and r.name == "clipcutter.routes.youtube"
+            and "playlist" in r.getMessage().lower()
+        ]
+        assert not warnings, (
+            f"Expected no playlist warnings on success; got: "
+            f"{[r.getMessage() for r in warnings]}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -462,3 +462,43 @@ class TestKeepSegmentValidation:
                 json={"segments": [{"start": 0.0, "end": 0.999}]},
             )
         assert resp.status_code == 400
+
+
+class TestKeepCopyFailureSurfacesAsError:
+    """If shutil.copy2 fails during the full-clip keep path (disk full,
+    permission denied, etc.) the worker MUST report the task as errored.
+    The old code swallowed the OSError and returned False, so the UI said
+    "kept" while no file landed in clips/kept/ — silent data loss."""
+
+    def test_oserror_during_copy_marks_task_as_error(
+        self, output_dir, app_client,
+    ):
+        stem = "copyfail"
+        clip = create_pending_clip(
+            output_dir, stem, "clip_001.mp4",
+            source_video="/fake/copyfail.mp4",
+        )
+        save_test_metadata(output_dir, stem, [clip], "/fake/copyfail.mp4")
+
+        # Patch shutil.copy2 as imported into the review module so the
+        # full-clip branch raises OSError. With the swallow removed, the
+        # worker's outer except records the error on the task.
+        def fail_copy(*args, **kwargs):
+            raise OSError("disk full")
+
+        with patch("clipcutter.routes.review.shutil.copy2", side_effect=fail_copy):
+            result = keep_and_wait(
+                app_client, stem, "clip_001.mp4",
+                json_body={"segments": []},
+            )
+
+        assert result["status"] == "error", result
+        assert result["error"] is not None
+        assert "disk full" in result["error"]
+
+        # And the file was NOT silently reported as kept — no file
+        # exists in clips/kept/ and metadata status is still "pending".
+        kept_path = output_dir / "clips" / "kept" / stem / "clip_001.mp4"
+        assert not kept_path.exists()
+        meta = _load_meta(output_dir, stem)
+        assert meta["clips"][0]["status"] == "pending"
