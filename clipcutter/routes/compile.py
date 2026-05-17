@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from clipcutter.config import DIR_CLIPS, DIR_COMPILATIONS, DIR_ENCODED, DIR_KEPT, DIR_METADATA
 from clipcutter.metadata import load_metadata
-from clipcutter.routes._helpers import _media_type, _sanitize_filename
+from clipcutter.routes._helpers import _media_type, _safe_join, _sanitize_filename
 from clipcutter.state import AppState
 
 
@@ -38,21 +38,28 @@ def create_router(state: AppState) -> APIRouter:
         if len(req.clips) < 2:
             raise HTTPException(400, "Need at least 2 clips for a compilation")
 
+        encoded_base = state.output_dir / DIR_CLIPS / DIR_ENCODED
+        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
+        meta_base = state.output_dir / DIR_METADATA
+
         # Resolve clip paths (prefer encoded, fall back to kept)
         clip_paths = []
         for ref in req.clips:
-            enc_dir = state.output_dir / DIR_CLIPS / DIR_ENCODED / ref.video_stem
-            kept_path = state.output_dir / DIR_CLIPS / DIR_KEPT / ref.video_stem / ref.filename
+            enc_dir = _safe_join(encoded_base, ref.video_stem)
+            kept_path = _safe_join(kept_base, ref.video_stem, ref.filename)
             found = None
 
             if enc_dir.exists():
-                meta_path = state.output_dir / DIR_METADATA / f"{ref.video_stem}_clips.json"
+                meta_path = _safe_join(meta_base, f"{ref.video_stem}_clips.json")
                 if meta_path.exists():
                     clip_metas = load_metadata(meta_path)
                     for cm in clip_metas:
                         if cm.filename == ref.filename and cm.encoded_filename:
-                            enc_path = enc_dir / cm.encoded_filename
-                            if enc_path.exists():
+                            try:
+                                enc_path = _safe_join(enc_dir, cm.encoded_filename)
+                            except HTTPException:
+                                enc_path = None
+                            if enc_path is not None and enc_path.exists():
                                 found = enc_path
                             break
 
@@ -169,15 +176,22 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.delete("/api/compilation/{compilation_id}")
     def delete_compilation(compilation_id: str):
-        meta_path = state.output_dir / DIR_METADATA / f"{compilation_id}.json"
+        meta_base = state.output_dir / DIR_METADATA
+        comp_base = state.output_dir / DIR_CLIPS / DIR_COMPILATIONS
+        meta_path = _safe_join(meta_base, f"{compilation_id}.json")
         if not meta_path.exists():
             raise HTTPException(404, "Compilation not found")
 
         try:
             data = json.loads(meta_path.read_text(encoding="utf-8"))
-            video_path = state.output_dir / DIR_CLIPS / DIR_COMPILATIONS / data.get("filename", "")
-            if video_path.exists():
-                video_path.unlink()
+            comp_filename = data.get("filename", "")
+            if comp_filename:
+                try:
+                    video_path = _safe_join(comp_base, comp_filename)
+                except HTTPException:
+                    video_path = None
+                if video_path is not None and video_path.exists():
+                    video_path.unlink()
         except Exception:
             pass
 
@@ -187,7 +201,10 @@ def create_router(state: AppState) -> APIRouter:
     @router.delete("/api/compilation/{compilation_id}/sources")
     def delete_compilation_sources(compilation_id: str):
         """Delete the individual clip files used to build a compilation."""
-        meta_path = state.output_dir / DIR_METADATA / f"{compilation_id}.json"
+        meta_base = state.output_dir / DIR_METADATA
+        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
+        encoded_base = state.output_dir / DIR_CLIPS / DIR_ENCODED
+        meta_path = _safe_join(meta_base, f"{compilation_id}.json")
         if not meta_path.exists():
             raise HTTPException(404, "Compilation not found")
 
@@ -198,9 +215,16 @@ def create_router(state: AppState) -> APIRouter:
         for clip_ref in clips:
             video_stem = clip_ref.get("video_stem", "")
             filename = clip_ref.get("filename", "")
+            if not video_stem or not filename:
+                continue
 
-            # Delete kept file
-            kept_path = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem / filename
+            # Delete kept file. Skip silently if the recorded path would
+            # escape output_dir — the metadata file is trusted (we write it)
+            # but if it's been hand-edited we still refuse to follow it out.
+            try:
+                kept_path = _safe_join(kept_base, video_stem, filename)
+            except HTTPException:
+                continue
             if kept_path.exists():
                 try:
                     kept_path.unlink()
@@ -209,13 +233,21 @@ def create_router(state: AppState) -> APIRouter:
                     pass
 
             # Delete encoded file via metadata
-            clip_meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+            try:
+                clip_meta_path = _safe_join(meta_base, f"{video_stem}_clips.json")
+            except HTTPException:
+                continue
             if clip_meta_path.exists():
                 for cm in load_metadata(clip_meta_path):
                     if cm.filename == filename:
                         if cm.encoded_filename:
-                            enc_path = state.output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / cm.encoded_filename
-                            if enc_path.exists():
+                            try:
+                                enc_path = _safe_join(
+                                    encoded_base, video_stem, cm.encoded_filename
+                                )
+                            except HTTPException:
+                                enc_path = None
+                            if enc_path is not None and enc_path.exists():
                                 try:
                                     enc_path.unlink()
                                 except OSError:
@@ -228,7 +260,8 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.get("/video/compilation/{filename}")
     def serve_compilation(filename: str):
-        clip_path = state.output_dir / DIR_CLIPS / DIR_COMPILATIONS / filename
+        comp_base = state.output_dir / DIR_CLIPS / DIR_COMPILATIONS
+        clip_path = _safe_join(comp_base, filename)
         if not clip_path.exists():
             raise HTTPException(404, "Compilation not found")
         return FileResponse(clip_path, media_type=_media_type(filename))

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from clipcutter.config import DIR_CLIPS, DIR_ENCODED, DIR_KEPT, DIR_METADATA, DIR_PENDING
 from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_custom_name, update_clip_duration, update_clip_status
-from clipcutter.routes._helpers import _media_type
+from clipcutter.routes._helpers import _media_type, _safe_join
 from clipcutter.state import AppState
 
 
@@ -162,7 +162,14 @@ def create_router(state: AppState) -> APIRouter:
     router = APIRouter()
 
     def _get_highlight_regions(video_stem: str, filename: str) -> list:
-        meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+        # Inner helper is only called from already-validated routes, but we
+        # re-validate cheaply so the helper is safe to reuse from elsewhere.
+        try:
+            meta_path = _safe_join(
+                state.output_dir / DIR_METADATA, f"{video_stem}_clips.json"
+            )
+        except HTTPException:
+            return []
         if not meta_path.exists():
             return []
         try:
@@ -221,11 +228,14 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.get("/video/{video_stem}/{filename}")
     def serve_video(video_stem: str, filename: str):
-        clip_path = state.output_dir / DIR_CLIPS / DIR_PENDING / video_stem / filename
+        pending_base = state.output_dir / DIR_CLIPS / DIR_PENDING
+        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
+        encoded_base = state.output_dir / DIR_CLIPS / DIR_ENCODED
+        clip_path = _safe_join(pending_base, video_stem, filename)
         if not clip_path.exists():
-            clip_path = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem / filename
+            clip_path = _safe_join(kept_base, video_stem, filename)
         if not clip_path.exists():
-            clip_path = state.output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / filename
+            clip_path = _safe_join(encoded_base, video_stem, filename)
         if not clip_path.exists():
             raise HTTPException(404, "Clip not found")
         return FileResponse(clip_path, media_type=_media_type(filename))
@@ -233,9 +243,11 @@ def create_router(state: AppState) -> APIRouter:
     @router.get("/api/waveform/{video_stem}/{filename}")
     def get_waveform(video_stem: str, filename: str, bars: int = 300):
         """Return downsampled RMS waveform data + highlight regions for a clip."""
-        clip_path = state.output_dir / DIR_CLIPS / DIR_PENDING / video_stem / filename
+        pending_base = state.output_dir / DIR_CLIPS / DIR_PENDING
+        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
+        clip_path = _safe_join(pending_base, video_stem, filename)
         if not clip_path.exists():
-            clip_path = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem / filename
+            clip_path = _safe_join(kept_base, video_stem, filename)
         if not clip_path.exists():
             raise HTTPException(404, "Clip not found")
 
@@ -303,8 +315,10 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.post("/api/clips/{video_stem}/{filename}/keep")
     def keep_clip(video_stem: str, filename: str, req: KeepRequest = None):
-        clip_path = state.output_dir / DIR_CLIPS / DIR_PENDING / video_stem / filename
-        meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+        pending_base = state.output_dir / DIR_CLIPS / DIR_PENDING
+        meta_base = state.output_dir / DIR_METADATA
+        clip_path = _safe_join(pending_base, video_stem, filename)
+        meta_path = _safe_join(meta_base, f"{video_stem}_clips.json")
 
         if not clip_path.exists():
             raise HTTPException(404, "Clip not found")
@@ -362,8 +376,10 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.post("/api/clips/{video_stem}/{filename}/discard")
     def discard_clip(video_stem: str, filename: str):
-        clip_path = state.output_dir / DIR_CLIPS / DIR_PENDING / video_stem / filename
-        meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+        pending_base = state.output_dir / DIR_CLIPS / DIR_PENDING
+        meta_base = state.output_dir / DIR_METADATA
+        clip_path = _safe_join(pending_base, video_stem, filename)
+        meta_path = _safe_join(meta_base, f"{video_stem}_clips.json")
 
         if not clip_path.exists():
             raise HTTPException(404, "Clip not found")

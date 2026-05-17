@@ -13,7 +13,7 @@ from clipcutter.metadata import (
     load_metadata, load_metadata_dict, update_clip_encoding,
     update_clip_status, clear_clip_encoding,
 )
-from clipcutter.routes._helpers import _media_type, _sanitize_filename
+from clipcutter.routes._helpers import _media_type, _safe_join, _sanitize_filename
 from clipcutter.state import AppState
 
 
@@ -135,10 +135,13 @@ def create_router(state: AppState) -> APIRouter:
             raise HTTPException(400, f"Unknown preset: {req.preset}")
 
         preset = presets[req.preset]
+        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
+        encoded_base = state.output_dir / DIR_CLIPS / DIR_ENCODED
+        meta_base = state.output_dir / DIR_METADATA
 
-        # Validate all files exist before starting
+        # Validate all files exist before starting (also rejects traversal)
         for clip_ref in req.clips:
-            kept_path = state.output_dir / DIR_CLIPS / DIR_KEPT / clip_ref.video_stem / clip_ref.filename
+            kept_path = _safe_join(kept_base, clip_ref.video_stem, clip_ref.filename)
             if not kept_path.exists():
                 raise HTTPException(404, f"Clip not found: {clip_ref.video_stem}/{clip_ref.filename}")
 
@@ -152,9 +155,9 @@ def create_router(state: AppState) -> APIRouter:
                     break
 
                 state.enc.set_current(clip_ref.filename, i + 1)
-                input_path = state.output_dir / DIR_CLIPS / DIR_KEPT / clip_ref.video_stem / clip_ref.filename
-                encoded_dir = state.output_dir / DIR_CLIPS / DIR_ENCODED / clip_ref.video_stem
-                meta_path = state.output_dir / DIR_METADATA / f"{clip_ref.video_stem}_clips.json"
+                input_path = _safe_join(kept_base, clip_ref.video_stem, clip_ref.filename)
+                encoded_dir = _safe_join(encoded_base, clip_ref.video_stem)
+                meta_path = _safe_join(meta_base, f"{clip_ref.video_stem}_clips.json")
 
                 # Use custom_name from metadata if available for output filename
                 custom_stem = None
@@ -196,7 +199,8 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.get("/video/encoded/{video_stem}/{filename}")
     def serve_encoded_video(video_stem: str, filename: str):
-        clip_path = state.output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / filename
+        encoded_base = state.output_dir / DIR_CLIPS / DIR_ENCODED
+        clip_path = _safe_join(encoded_base, video_stem, filename)
         if not clip_path.exists():
             raise HTTPException(404, "Encoded clip not found")
         return FileResponse(clip_path, media_type=_media_type(filename))
@@ -204,8 +208,10 @@ def create_router(state: AppState) -> APIRouter:
     @router.delete("/api/kept/{video_stem}/{filename}")
     def delete_kept_clip(video_stem: str, filename: str):
         """Delete a kept clip file and mark it as discarded in metadata."""
-        kept_path = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem / filename
-        meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
+        meta_base = state.output_dir / DIR_METADATA
+        kept_path = _safe_join(kept_base, video_stem, filename)
+        meta_path = _safe_join(meta_base, f"{video_stem}_clips.json")
 
         if not kept_path.exists():
             raise HTTPException(404, "Clip not found")
@@ -223,7 +229,8 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.get("/api/open-folder/kept/{video_stem}")
     def open_folder(video_stem: str):
-        folder = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem
+        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
+        folder = _safe_join(kept_base, video_stem)
         if not folder.exists():
             raise HTTPException(404, "Folder not found")
         os.startfile(str(folder))
@@ -255,7 +262,9 @@ def create_router(state: AppState) -> APIRouter:
     @router.delete("/api/encoded/{video_stem}/{filename}")
     def delete_encoded_clip(video_stem: str, filename: str):
         """Delete the encoded version of a kept clip and clear its encoding metadata."""
-        meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+        meta_base = state.output_dir / DIR_METADATA
+        encoded_base = state.output_dir / DIR_CLIPS / DIR_ENCODED
+        meta_path = _safe_join(meta_base, f"{video_stem}_clips.json")
         if not meta_path.exists():
             raise HTTPException(404, "Clip metadata not found")
 
@@ -269,7 +278,7 @@ def create_router(state: AppState) -> APIRouter:
         if not encoded_filename:
             raise HTTPException(404, "No encoded version found")
 
-        enc_path = state.output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / encoded_filename
+        enc_path = _safe_join(encoded_base, video_stem, encoded_filename)
         freed_mb = 0.0
         if enc_path.exists():
             freed_mb = round(enc_path.stat().st_size / (1024 * 1024), 1)

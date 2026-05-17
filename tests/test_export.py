@@ -449,3 +449,52 @@ class TestStorageSummary:
         )
         assert data["total_mb"] == expected
         assert data["kept"]["size_mb"] > 0  # Ensure non-trivial state
+
+
+class TestPathTraversalRejection:
+    """Path components that contain `..` must be refused before any FS work.
+
+    These exercise _safe_join applied to the routes that take untrusted
+    video_stem / filename / compilation_id path parameters. We use `%2e%2e`
+    (URL-encoded `..`) so the value survives client-side path normalization
+    and reaches the handler as a literal `..` segment — the actually
+    exploitable form under the real server (uvicorn decodes %2F to /, which
+    would otherwise be re-segmented by the router into 404). We assert a
+    400 response from the helper, and for delete endpoints that no file
+    outside output_dir was touched.
+    """
+
+    def test_serve_video_rejects_dotdot_in_stem(self, output_dir, app_client):
+        resp = app_client.get("/video/%2e%2e/foo.mp4")
+        assert resp.status_code == 400
+
+    def test_serve_video_rejects_dotdot_in_filename(self, output_dir, app_client):
+        resp = app_client.get("/video/foo/%2e%2e")
+        assert resp.status_code == 400
+
+    def test_get_waveform_rejects_dotdot(self, output_dir, app_client):
+        resp = app_client.get("/api/waveform/%2e%2e/foo.mp4")
+        assert resp.status_code == 400
+
+    def test_serve_encoded_rejects_dotdot(self, output_dir, app_client):
+        resp = app_client.get("/video/encoded/%2e%2e/foo.mp4")
+        assert resp.status_code == 400
+
+    def test_serve_compilation_rejects_dotdot(self, output_dir, app_client):
+        resp = app_client.get("/video/compilation/%2e%2e")
+        assert resp.status_code == 400
+
+    def test_delete_kept_clip_rejects_dotdot_in_stem(self, output_dir, app_client):
+        # Set up a real kept clip so a non-traversal request would succeed.
+        kept_dir = output_dir / "clips" / "kept" / "real_stem"
+        kept_dir.mkdir(parents=True, exist_ok=True)
+        legit = kept_dir / "legit.mp4"
+        legit.write_text("legit data", encoding="utf-8")
+
+        # Traversal attempt: stem=".."
+        resp = app_client.delete("/api/kept/%2e%2e/legit.mp4")
+        assert resp.status_code == 400
+        assert legit.exists(), (
+            "Traversal must be rejected before any unlink. The legit clip "
+            "must not have been touched."
+        )

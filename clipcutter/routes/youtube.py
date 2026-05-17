@@ -11,6 +11,7 @@ from clipcutter.config import (
     YOUTUBE_CREDENTIALS_FILE, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_DEFAULT_PRIVACY,
 )
 from clipcutter.metadata import load_metadata, update_clip_youtube
+from clipcutter.routes._helpers import _safe_join
 from clipcutter.state import AppState
 
 
@@ -175,6 +176,17 @@ if (window.opener) {
         if creds is None:
             raise HTTPException(401, "Not authenticated with YouTube")
 
+        # Up-front path validation: reject any clip with a traversal-laden
+        # video_stem/filename before we kick off the worker. Catches the
+        # exfiltration vector where a hostile fetch supplies "../../etc"
+        # and YouTube ends up hosting the user's secrets.
+        meta_base = state.output_dir / DIR_METADATA
+        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
+        encoded_base = state.output_dir / DIR_CLIPS / DIR_ENCODED
+        for clip_req in req.clips:
+            _safe_join(kept_base, clip_req.video_stem, clip_req.filename)
+            _safe_join(meta_base, f"{clip_req.video_stem}_clips.json")
+
         state.upl.reset(total=len(req.clips))
 
         def run():
@@ -192,7 +204,7 @@ if (window.opener) {
 
                 # Check for duplicate upload (skip if already uploaded)
                 already_uploaded = False
-                meta_path = state.output_dir / DIR_METADATA / f"{clip_req.video_stem}_clips.json"
+                meta_path = _safe_join(meta_base, f"{clip_req.video_stem}_clips.json")
                 if meta_path.exists():
                     dup_metas = load_metadata(meta_path)
                     for dm in dup_metas:
@@ -206,24 +218,30 @@ if (window.opener) {
 
                 # Determine which file to upload
                 if clip_req.use_encoded:
-                    meta_path = state.output_dir / DIR_METADATA / f"{clip_req.video_stem}_clips.json"
+                    meta_path = _safe_join(meta_base, f"{clip_req.video_stem}_clips.json")
                     file_path = None
                     if meta_path.exists():
                         clip_metas = load_metadata(meta_path)
                         for cm in clip_metas:
                             if cm.filename == clip_req.filename and cm.encoded_filename:
-                                enc_path = (state.output_dir / DIR_CLIPS / DIR_ENCODED /
-                                            clip_req.video_stem / cm.encoded_filename)
-                                if enc_path.exists():
+                                try:
+                                    enc_path = _safe_join(
+                                        encoded_base, clip_req.video_stem, cm.encoded_filename
+                                    )
+                                except HTTPException:
+                                    enc_path = None
+                                if enc_path is not None and enc_path.exists():
                                     file_path = enc_path
                                 break
 
                     if file_path is None:
-                        file_path = (state.output_dir / DIR_CLIPS / DIR_KEPT /
-                                     clip_req.video_stem / clip_req.filename)
+                        file_path = _safe_join(
+                            kept_base, clip_req.video_stem, clip_req.filename
+                        )
                 else:
-                    file_path = (state.output_dir / DIR_CLIPS / DIR_KEPT /
-                                 clip_req.video_stem / clip_req.filename)
+                    file_path = _safe_join(
+                        kept_base, clip_req.video_stem, clip_req.filename
+                    )
 
                 if not file_path.exists():
                     state.upl.add_error(clip_req.filename, f"File not found: {file_path.name}")
@@ -246,7 +264,7 @@ if (window.opener) {
                 if result.success:
                     state.upl.add_completed(clip_req.filename, result.video_id, result.url)
 
-                    meta_path = state.output_dir / DIR_METADATA / f"{clip_req.video_stem}_clips.json"
+                    meta_path = _safe_join(meta_base, f"{clip_req.video_stem}_clips.json")
                     if meta_path.exists():
                         update_clip_youtube(
                             meta_path, clip_req.filename,
@@ -260,7 +278,7 @@ if (window.opener) {
                             pass  # Non-fatal: upload succeeded
                 else:
                     state.upl.add_error(clip_req.filename, result.error or "Unknown error")
-                    meta_path = state.output_dir / DIR_METADATA / f"{clip_req.video_stem}_clips.json"
+                    meta_path = _safe_join(meta_base, f"{clip_req.video_stem}_clips.json")
                     if meta_path.exists():
                         update_clip_youtube(
                             meta_path, clip_req.filename,
