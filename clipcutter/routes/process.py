@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from clipcutter import config
 from clipcutter.config import DIR_CLIPS, DIR_METADATA, DIR_PENDING
 from clipcutter.metadata import load_metadata, load_metadata_dict
 from clipcutter.routes._helpers import _safe_join
@@ -72,8 +73,6 @@ def create_router(state: AppState, launch_cwd: str) -> APIRouter:
     def processing_status():
         return state.proc.snapshot()
 
-    VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.webm'}
-
     @router.get("/api/folder-scan")
     def scan_folder(folder: str):
         folder_path = Path(folder)
@@ -85,7 +84,7 @@ def create_router(state: AppState, launch_cwd: str) -> APIRouter:
         now = datetime.now()
 
         for f in sorted(folder_path.iterdir()):
-            if not f.is_file() or f.suffix.lower() not in VIDEO_EXTENSIONS:
+            if not f.is_file() or f.suffix.lower() not in config.VIDEO_EXTENSIONS:
                 continue
             size_mb = round(f.stat().st_size / (1024 * 1024), 1)
             age_days = (now - datetime.fromtimestamp(f.stat().st_mtime)).days
