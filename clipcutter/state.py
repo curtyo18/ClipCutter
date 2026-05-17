@@ -436,3 +436,21 @@ class AppState:
         self.upl = UploadState()
         self.comp = CompilationState()
         self.keep = KeepState()
+        # Single-use OAuth state token: set by /api/youtube/auth/start,
+        # consumed (and cleared) by /oauth/callback. Storing in-memory
+        # rather than on-disk prevents stale stub-creds files from
+        # fooling other YT routes into thinking auth is complete.
+        self._youtube_oauth_state: Optional[str] = None
+        self._youtube_oauth_lock = threading.Lock()
+
+    def set_youtube_oauth_state(self, state: str) -> None:
+        """Stash a freshly-generated OAuth state token (overwrites any prior)."""
+        with self._youtube_oauth_lock:
+            self._youtube_oauth_state = state
+
+    def consume_youtube_oauth_state(self) -> Optional[str]:
+        """Return-and-clear the pending OAuth state token (single-use)."""
+        with self._youtube_oauth_lock:
+            value = self._youtube_oauth_state
+            self._youtube_oauth_state = None
+            return value

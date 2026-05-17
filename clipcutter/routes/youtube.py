@@ -1,9 +1,10 @@
 """YouTube upload and OAuth endpoints."""
 import logging
+import threading
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -50,7 +51,17 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.get("/api/youtube/status")
     def youtube_status():
-        """Check if YouTube credentials exist and are valid."""
+        """Check if YouTube credentials exist and are valid.
+
+        Returns one of:
+          - {authenticated: False}                       — no creds file
+          - {authenticated: False, error: "...expired"}  — RefreshError
+          - {authenticated: True, channel_name: "..."}   — happy path
+          - {authenticated: True, error_class, error}    — surfaced anomaly
+            (HttpError, transient network failure, etc.) — don't lie and
+            call it "expired", show the user what actually went wrong so
+            they can decide whether to retry or re-auth.
+        """
         from clipcutter.youtube import load_credentials, get_authenticated_service
         creds = load_credentials(creds_path)
         if creds is None:
@@ -67,40 +78,125 @@ def create_router(state: AppState) -> APIRouter:
                 from clipcutter.youtube import save_credentials
                 save_credentials(new_creds, creds_path)
             return {"authenticated": True, "channel_name": channel_name}
-        except Exception:
-            return {"authenticated": False, "error": "Credentials expired or invalid"}
+        except Exception as exc:
+            # Lazily import the google exception classes; if the deps
+            # aren't installed, fall through to the generic branch.
+            try:
+                from google.auth.exceptions import RefreshError
+            except Exception:  # pragma: no cover
+                RefreshError = ()  # type: ignore[assignment]
+            try:
+                from googleapiclient.errors import HttpError
+            except Exception:  # pragma: no cover
+                HttpError = ()  # type: ignore[assignment]
+
+            if RefreshError and isinstance(exc, RefreshError):
+                # Refresh token has been revoked / expired / replaced.
+                # The user must re-auth; nothing the app can do.
+                return {
+                    "authenticated": False,
+                    "error": "Credentials expired or invalid",
+                }
+            if HttpError and isinstance(exc, HttpError):
+                status = getattr(getattr(exc, "resp", None), "status", None)
+                return {
+                    "authenticated": True,
+                    "error_class": "HttpError",
+                    "error": f"HTTP {status}: {exc}",
+                }
+            # Anything else (DNS failure, socket timeout, library bug):
+            # surface the actual class + message so the user can act.
+            return {
+                "authenticated": True,
+                "error_class": type(exc).__name__,
+                "error": str(exc),
+            }
+
+    # In-process buffer for the pending OAuth flow's client_id/secret.
+    # Lives only as long as the user takes to complete the Google
+    # consent screen (single-pending-flow). We previously wrote a
+    # half-formed creds JSON to disk for this; that file is gone now
+    # because load_credentials would have returned a stub for it and
+    # every authenticated-only route would have thought we were signed
+    # in. Keeping the secret in-memory means it never lands in
+    # output/.youtube_credentials.json until a real token-exchange
+    # succeeds.
+    pending_oauth: dict = {}
+    pending_oauth_lock = threading.Lock()
 
     @router.post("/api/youtube/auth/start")
     def youtube_auth_start(req: YouTubeAuthStartRequest, request: Request):
-        """Save client_id/secret and return the OAuth2 authorization URL."""
-        from clipcutter.youtube import get_auth_url, YouTubeCredentials, save_credentials
+        """Return the OAuth2 authorization URL.
+
+        Generates a single-use random `state` token, stashes it on
+        AppState, and returns the auth URL embedding that token. The
+        client_id/client_secret are held in an in-process buffer until
+        the callback completes — NO partial creds file is written.
+        """
+        from clipcutter.youtube import get_auth_url
 
         base_url = str(request.base_url).rstrip("/")
         redirect_uri = f"{base_url}/oauth/callback"
 
-        auth_url = get_auth_url(req.client_id, redirect_uri)
+        auth_url, oauth_state = get_auth_url(req.client_id, redirect_uri)
 
-        partial_creds = YouTubeCredentials(
-            access_token="",
-            refresh_token="",
-            token_expiry=None,
-            client_id=req.client_id,
-            client_secret=req.client_secret,
-        )
-        save_credentials(partial_creds, creds_path)
+        state.set_youtube_oauth_state(oauth_state)
+        with pending_oauth_lock:
+            pending_oauth["client_id"] = req.client_id
+            pending_oauth["client_secret"] = req.client_secret
 
         return {"auth_url": auth_url}
 
     @router.get("/oauth/callback", response_class=HTMLResponse)
-    def oauth_callback(code: str, request: Request):
-        """Exchange authorization code for credentials."""
-        from clipcutter.youtube import (
-            exchange_code, load_credentials, save_credentials,
-        )
+    def oauth_callback(
+        request: Request,
+        code: Optional[str] = Query(None),
+        state_param: Optional[str] = Query(None, alias="state"),
+        error: Optional[str] = Query(None),
+    ):
+        """Exchange authorization code for credentials.
 
-        partial = load_credentials(creds_path)
-        if partial is None:
-            raise HTTPException(400, "No pending OAuth flow (client_id/secret missing)")
+        Verifies the `state` query param matches the token stashed in
+        AppState during /api/youtube/auth/start. A mismatch (or a
+        missing token on either side) means the request didn't
+        originate from the user's own auth-start click — could be a
+        replayed callback URL, a stale browser tab, or a hostile process
+        on localhost trying to bind a different Google account to this
+        install. Reject with 400 in every such case.
+
+        Also handles Google's documented error responses (`?error=...`,
+        e.g. `access_denied` when the user clicks "Cancel" on the
+        consent screen) so the user sees a clean message instead of a
+        stack trace from missing-`code`.
+        """
+        from clipcutter.youtube import exchange_code, save_credentials
+
+        # Consume the state ALWAYS (single-use), even if validation
+        # later fails — prevents replay of a stale state token.
+        expected_state = state.consume_youtube_oauth_state()
+
+        # Google forwards the user's "Cancel" or any OAuth error as
+        # ?error=...&state=...; surface it as 400 with the upstream code.
+        if error:
+            raise HTTPException(
+                400, f"OAuth flow returned error: {error}",
+            )
+
+        if not state_param or not expected_state or state_param != expected_state:
+            raise HTTPException(
+                400, "OAuth state mismatch or missing (possible replay or stale flow)",
+            )
+
+        if not code:
+            raise HTTPException(400, "Missing authorization code")
+
+        with pending_oauth_lock:
+            client_id = pending_oauth.pop("client_id", None)
+            client_secret = pending_oauth.pop("client_secret", None)
+        if not client_id or not client_secret:
+            raise HTTPException(
+                400, "No pending OAuth flow (client_id/secret missing)",
+            )
 
         base_url = str(request.base_url).rstrip("/")
         redirect_uri = f"{base_url}/oauth/callback"
@@ -108,8 +204,8 @@ def create_router(state: AppState) -> APIRouter:
         try:
             creds = exchange_code(
                 code=code,
-                client_id=partial.client_id,
-                client_secret=partial.client_secret,
+                client_id=client_id,
+                client_secret=client_secret,
                 redirect_uri=redirect_uri,
             )
             save_credentials(creds, creds_path)
@@ -194,7 +290,7 @@ if (window.opener) {
 
         def run():
             from clipcutter.youtube import (
-                upload_video, add_to_playlist, load_credentials, save_credentials,
+                upload_video, add_to_playlist, load_credentials,
             )
 
             current_creds = load_credentials(creds_path)
@@ -263,7 +359,15 @@ if (window.opener) {
                     privacy=clip_req.privacy,
                     progress_callback=progress_cb,
                     cancel_event=state.upl.cancel_event,
+                    creds_path=creds_path,
                 )
+
+                # Reload creds in case upload_video persisted a
+                # refreshed access token mid-flight — the next clip
+                # gets the fresh token instead of the stale one.
+                reloaded = load_credentials(creds_path)
+                if reloaded is not None:
+                    current_creds = reloaded
 
                 if result.success:
                     state.upl.add_completed(clip_req.filename, result.video_id, result.url)
