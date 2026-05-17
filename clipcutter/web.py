@@ -1,5 +1,6 @@
 """Web UI for clip processing and review."""
 import shutil
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -15,7 +16,12 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 def _cleanup_stale_pending(output_dir: Path):
-    """Delete files from pending/ that metadata already marks as kept/discarded."""
+    """Delete files from pending/ that metadata already marks as kept/discarded.
+
+    Also sweeps the ``.waveform.json`` sidecars sitting next to each stale clip
+    — leaving them behind would block ``video_dir.rmdir()`` (the dir would no
+    longer be empty) and they'd accumulate forever across runs.
+    """
     pending_dir = output_dir / DIR_CLIPS / DIR_PENDING
     meta_dir = output_dir / DIR_METADATA
     if not pending_dir.exists():
@@ -30,7 +36,14 @@ def _cleanup_stale_pending(output_dir: Path):
             continue
 
         clip_metas = load_metadata(meta_path)
-        non_pending = {c.filename for c in clip_metas if c.status != "pending"}
+        # Target both the clip itself and its waveform sidecar, but only for
+        # clips that are no longer pending. Clips still in "pending" status
+        # keep their sidecar so the review UI doesn't have to re-derive it.
+        non_pending = set()
+        for c in clip_metas:
+            if c.status != "pending":
+                non_pending.add(c.filename)
+                non_pending.add(c.filename + ".waveform.json")
 
         for f in list(video_dir.iterdir()):
             if f.name in non_pending:
@@ -56,9 +69,19 @@ def create_app(output_dir: Path, cwd: Optional[str] = None) -> FastAPI:
     state = AppState(output_dir)
     launch_cwd = cwd or str(Path.cwd())
 
-    _cleanup_stale_pending(output_dir)
-
     app = FastAPI(title="ClipCutter")
+
+    @app.on_event("startup")
+    def _kick_off_cleanup():
+        """Run stale-pending cleanup on a daemon thread so a large pending/
+        tree doesn't block uvicorn from accepting requests at startup."""
+        t = threading.Thread(
+            target=_cleanup_stale_pending,
+            args=(output_dir,),
+            name="clipcutter-startup-cleanup",
+            daemon=True,
+        )
+        t.start()
 
     app.include_router(process.create_router(state, launch_cwd))
     app.include_router(compile.create_router(state))

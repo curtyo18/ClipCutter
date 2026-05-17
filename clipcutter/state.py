@@ -3,9 +3,16 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+# Cap on retained processing log lines. The FE polls /api/process/status ~1Hz
+# and ships the whole list each tick, so an unbounded list grows the payload
+# without bound on long runs. 500 covers a typical multi-video session while
+# keeping the per-poll JSON payload small.
+PROCESS_LOG_MAXLEN = 500
 
 
 class ProcessingState:
@@ -13,7 +20,10 @@ class ProcessingState:
 
     def __init__(self):
         self.running = False
-        self.log_lines: list[str] = []
+        # Bounded ring buffer — see PROCESS_LOG_MAXLEN comment above.
+        # deque.append is O(1) and oldest-eviction is automatic; list(deque)
+        # in snapshot() yields a cheap shallow copy.
+        self.log_lines: deque[str] = deque(maxlen=PROCESS_LOG_MAXLEN)
         self.error: Optional[str] = None
         self.videos_total: int = 0
         self.videos_done: int = 0
@@ -23,7 +33,7 @@ class ProcessingState:
     def reset(self):
         with self._lock:
             self.running = True
-            self.log_lines = []
+            self.log_lines = deque(maxlen=PROCESS_LOG_MAXLEN)
             self.error = None
             self.videos_total = 0
             self.videos_done = 0
