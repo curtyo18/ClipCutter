@@ -38,6 +38,11 @@ KEEP_FFMPEG_TIMEOUT = 600
 # unreadable clip can hang the keep request thread indefinitely.
 KEEP_FFPROBE_TIMEOUT = 30
 
+# Fallback segment end when ffprobe failed to measure the clip duration.
+# Effectively "trim to end of file" — large enough that ffmpeg's own EOF
+# handling caps it, small enough to stay numerically harmless.
+MAX_PROBE_FALLBACK_DURATION_SECONDS = 9999.0
+
 
 class Segment(BaseModel):
     start: float
@@ -77,7 +82,7 @@ def _normalise_segments(req: Optional[KeepRequest], clip_duration: float) -> lis
     """Sort segments and substitute the full clip when none were provided."""
     segments = req.segments if req and req.segments else []
     if not segments:
-        segments = [Segment(start=0.0, end=clip_duration or 9999.0)]
+        segments = [Segment(start=0.0, end=clip_duration or MAX_PROBE_FALLBACK_DURATION_SECONDS)]
     return sorted(segments, key=lambda s: s.start)
 
 
@@ -439,17 +444,21 @@ def create_router(state: AppState) -> APIRouter:
         def register_popen(p: Optional[subprocess.Popen]) -> None:
             state.keep.set_popen(task_id, p)
 
+        # Matches the `is_full_clip` predicate inside `_do_keep`: a single
+        # segment that covers the whole probed duration becomes a plain
+        # file copy, so its step label is "Saving clip…"; every other
+        # shape (multi-segment, or a partial single segment) hits ffmpeg
+        # and is labelled "Trimming…".
+        is_full_clip_keep = (
+            len(segments) == 1
+            and segments[0].start <= 0.1
+            and (clip_duration == 0 or (clip_duration - segments[0].end) <= 0.1)
+        )
+        step_label = "Saving clip…" if is_full_clip_keep else "Trimming…"
+
         def worker() -> None:
             try:
-                state.keep.update_step(
-                    task_id,
-                    "Trimming…" if len(segments) > 1 else
-                    "Saving clip…" if (
-                        len(segments) == 1
-                        and segments[0].start <= 0.1
-                        and (clip_duration == 0 or (clip_duration - segments[0].end) <= 0.1)
-                    ) else "Trimming…",
-                )
+                state.keep.update_step(task_id, step_label)
                 trimmed = _do_keep(
                     output_dir=state.output_dir,
                     clip_path=clip_path,
