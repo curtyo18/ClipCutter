@@ -13,9 +13,21 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from clipcutter.config import DIR_CLIPS, DIR_ENCODED, DIR_KEPT, DIR_METADATA, DIR_PENDING
+from clipcutter.errors import FFmpegTimeoutError
 from clipcutter.metadata import load_metadata, load_metadata_dict, update_clip_custom_name, update_clip_duration, update_clip_status
 from clipcutter.routes._helpers import _media_type, _safe_join
 from clipcutter.state import AppState
+
+# Wall-clock ceiling on a single keep-path ffmpeg invocation. A keep is
+# essentially a one-off trim/encode so the same 10-minute ceiling as the
+# encode worker (clipcutter.encoder.FFMPEG_ENCODE_TIMEOUT) is the right
+# scale — comfortable for healthy inputs but small enough that a stuck
+# call surfaces instead of pinning the keep task forever.
+KEEP_FFMPEG_TIMEOUT = 600
+
+# Short ceiling for the ffprobe duration call. Without this a corrupt or
+# unreadable clip can hang the keep request thread indefinitely.
+KEEP_FFPROBE_TIMEOUT = 30
 
 
 class Segment(BaseModel):
@@ -30,11 +42,21 @@ class KeepRequest(BaseModel):
 
 
 def _probe_duration(clip_path: Path) -> float:
-    """Probe clip duration with ffprobe; return 0.0 if probe fails."""
-    probe = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(clip_path)],
-        capture_output=True, text=True,
-    )
+    """Probe clip duration with ffprobe; return 0.0 if probe fails.
+
+    Raises FFmpegTimeoutError if ffprobe exceeds KEEP_FFPROBE_TIMEOUT —
+    a corrupt clip used to hang the keep request thread indefinitely.
+    """
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(clip_path)],
+            capture_output=True, text=True,
+            timeout=KEEP_FFPROBE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise FFmpegTimeoutError(
+            f"ffprobe timed out after {KEEP_FFPROBE_TIMEOUT}s probing {clip_path}"
+        ) from exc
     try:
         data = json.loads(probe.stdout)
         return float(data.get("format", {}).get("duration", 0))
@@ -79,16 +101,21 @@ def _run_ffmpeg(cmd: list[str], *,
     if register_popen is not None:
         register_popen(proc)
     try:
-        # Sentinel timeout — Task 11 replaces with duration-aware bounds.
+        # Flat ceiling matches the encode worker. A hung keep ffmpeg
+        # can't pin the request thread forever even if cancel isn't
+        # pressed; the worker maps FFmpegTimeoutError to an "error"
+        # status on the task so the UI shows it instead of spinning.
         try:
-            _stdout, stderr = proc.communicate(timeout=3600)
+            _stdout, stderr = proc.communicate(timeout=KEEP_FFMPEG_TIMEOUT)
         except subprocess.TimeoutExpired:
             proc.kill()
             try:
                 _stdout, stderr = proc.communicate(timeout=5)
             except Exception:
                 stderr = ""
-            raise RuntimeError(f"{error_label} (timeout)")
+            raise FFmpegTimeoutError(
+                f"{error_label}: timed out after {KEEP_FFMPEG_TIMEOUT}s"
+            )
     finally:
         if register_popen is not None:
             register_popen(None)

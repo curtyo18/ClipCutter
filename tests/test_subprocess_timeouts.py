@@ -339,17 +339,49 @@ class TestEncodeWorkerTimeout:
         assert observed_timeouts, "worker never called communicate()"
         assert FFMPEG_ENCODE_TIMEOUT in observed_timeouts
 
-    def test_worker_timeout_recorded_as_per_clip_error(
+    def test_worker_timeout_then_second_clip_succeeds(
         self, output_dir, app_client
     ):
-        """If Popen.communicate raises TimeoutExpired, the worker
-        should record a per-clip error rather than crash the thread.
-        The batch finishes with a non-empty errors list."""
-        stem = "timeout_err"
-        filename = "clip_001.mp4"
-        self._setup_kept_clip(output_dir, stem, filename)
+        """A two-clip batch where the first clip's Popen.communicate
+        raises TimeoutExpired must not crash the worker — the second
+        clip should still encode and land in metadata.
 
-        class FakeProc:
+        Single-clip batches can't prove this (a per-clip error and a
+        worker crash both leave the batch with the same "errors=[..]"
+        footprint), so the only way to verify "batch survives" is to
+        check that work continues after the failure.
+        """
+        stem = "timeout_batch"
+        bad_filename = "clip_001.mp4"
+        good_filename = "clip_002.mp4"
+        self._setup_kept_clip(output_dir, stem, bad_filename)
+
+        # Second clip: add a second entry into the same metadata file
+        # so update_clip_encoding finds it.
+        kept_dir = output_dir / "clips" / "kept" / stem
+        (kept_dir / good_filename).write_bytes(b"fake-kept-bytes-2")
+        meta_path = output_dir / "metadata" / f"{stem}_clips.json"
+        import json as _json
+        meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["clip_count"] = 2
+        meta["clips"].append({
+            "filename": good_filename,
+            "source_video": f"/fake/{stem}.mp4",
+            "start_time": 2.0,
+            "end_time": 4.0,
+            "duration": 2.0,
+            "detection_reasons": ["volume_spike"],
+            "confidence": 0.8,
+            "status": "kept",
+        })
+        meta_path.write_text(_json.dumps(meta), encoding="utf-8")
+
+        # Each Popen call gets its own FakeProc; the first one (for the
+        # bad clip) raises TimeoutExpired on its initial communicate,
+        # the second (for the good clip) returns success.
+        proc_calls: list = []
+
+        class TimeoutFakeProc:
             def __init__(self):
                 self.returncode = -9
                 self._calls = 0
@@ -358,20 +390,42 @@ class TestEncodeWorkerTimeout:
                 self._calls += 1
                 if self._calls == 1:
                     raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=timeout)
-                # Second call is the post-kill drain.
+                return ("", "")
+
+            def kill(self):
+                pass
+
+        class SuccessFakeProc:
+            def __init__(self, output_path: Path):
+                self.returncode = 0
+                self._output_path = output_path
+
+            def communicate(self, timeout=None):
+                # Materialise the encoded file so post-encode checks pass.
+                self._output_path.parent.mkdir(parents=True, exist_ok=True)
+                self._output_path.write_bytes(b"fake-encoded")
                 return ("", "")
 
             def kill(self):
                 pass
 
         def fake_popen(*args, **kwargs):
-            return FakeProc()
+            cmd = args[0]
+            output_arg = Path(cmd[-1])
+            proc_calls.append(output_arg.name)
+            # First call is the first clip → timeout; second is success.
+            if len(proc_calls) == 1:
+                return TimeoutFakeProc()
+            return SuccessFakeProc(output_arg)
 
         with patch("clipcutter.routes.encode.subprocess.Popen", side_effect=fake_popen):
             resp = app_client.post(
                 "/api/encode",
                 json={
-                    "clips": [{"video_stem": stem, "filename": filename}],
+                    "clips": [
+                        {"video_stem": stem, "filename": bad_filename},
+                        {"video_stem": stem, "filename": good_filename},
+                    ],
                     "preset": "high",
                 },
             )
@@ -387,10 +441,30 @@ class TestEncodeWorkerTimeout:
 
         assert final is not None
         assert final["running"] is False
-        # The clip should be in errors, not completed.
-        assert final["errors"], "timeout should produce a per-clip error"
-        err_msg = final["errors"][0].get("error", "")
-        assert "timed out" in err_msg.lower()
+
+        # Worker advanced past the timeout: both Popens fired.
+        assert len(proc_calls) == 2, f"expected 2 Popen calls, got {proc_calls!r}"
+
+        # First clip in errors with a "timed out" message.
+        assert any(
+            e.get("filename") == bad_filename
+            and "timed out" in (e.get("error") or "").lower()
+            for e in final["errors"]
+        ), f"bad clip should be in errors with a timeout message: {final['errors']!r}"
+
+        # Second clip completed (not in errors).
+        assert good_filename in final["completed"], (
+            f"good clip should have completed after the first's timeout: "
+            f"completed={final['completed']!r} errors={final['errors']!r}"
+        )
+
+        # And the second clip's encoded_filename landed in metadata.
+        from clipcutter.metadata import load_metadata
+        clip_metas = load_metadata(meta_path)
+        good_meta = next(c for c in clip_metas if c.filename == good_filename)
+        assert good_meta.encoded_filename, (
+            "encoded_filename should be set on the second clip after batch advance"
+        )
 
 
 # ---------------------------------------------------------------------------

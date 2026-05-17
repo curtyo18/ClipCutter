@@ -12,7 +12,6 @@ from clipcutter.errors import FFmpegTimeoutError
 # thread hangs and the UI sits at the current step indefinitely. Values
 # are generous enough for healthy inputs but small enough that a stuck
 # call surfaces quickly.
-FFMPEG_CHECK_TIMEOUT = 10           # `ffmpeg -version` / `ffprobe -version`
 FFPROBE_TIMEOUT = 30                # short metadata queries
 FFMPEG_EXTRACT_AUDIO_TIMEOUT = 600  # 10 min ceiling for the full-track WAV
 FFMPEG_EXTRACT_CLIP_TIMEOUT = 60    # `-c copy` is essentially I/O bound
