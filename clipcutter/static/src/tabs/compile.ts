@@ -1,4 +1,4 @@
-import { startCompilation, fetchCompilationStatus, cancelCompilation, fetchCompilations, deleteCompilation, deleteCompilationSources } from '../api';
+import { startCompilation, fetchCompilationStatus, fetchCompilations, deleteCompilation, deleteCompilationSources } from '../api';
 import type { KeptClipInfo } from '../api';
 import { escapeHtml, openPreviewModal } from '../utils';
 import { tasks } from '../tasks';
@@ -161,7 +161,6 @@ export async function startCompilationHandler(): Promise<void> {
     label: 'Building compilation',
     subtitle: `${clipsForLabel} clips · ${transition}`,
     pollMs: 1000,
-    cancel: cancelCompilation,
     fetchStatus: async () => {
       const data = await fetchCompilationStatus();
       return {
@@ -186,15 +185,6 @@ tasks.addEventListener('task-complete', (e) => {
   }
   void loadPastCompilations();
 });
-
-export async function cancelCompilationHandler(): Promise<void> {
-  const running = tasks.getAll().find(x => x.kind === 'compile' && x.state === 'running');
-  if (running) {
-    await tasks.cancel(running.id);
-  } else {
-    await cancelCompilation().catch(() => {});
-  }
-}
 
 export async function deleteCompilationSourcesHandler(compId: string | undefined, clipCount: string | number | undefined): Promise<void> {
   if (!compId) return;

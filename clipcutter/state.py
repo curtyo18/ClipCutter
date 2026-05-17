@@ -272,7 +272,6 @@ class CompilationState:
         self.completed = False
         self.error: Optional[str] = None
         self.output_filename: Optional[str] = None
-        self.cancelled = False
         self._lock = threading.Lock()
 
     def reset(self):
@@ -283,7 +282,6 @@ class CompilationState:
             self.completed = False
             self.error = None
             self.output_filename = None
-            self.cancelled = False
 
     def update(self, step: str, pct: float):
         with self._lock:
@@ -306,7 +304,6 @@ class CompilationState:
                 "completed": self.completed,
                 "error": self.error,
                 "output_filename": self.output_filename,
-                "cancelled": self.cancelled,
             }
 
 

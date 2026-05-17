@@ -147,11 +147,6 @@ def create_router(state: AppState) -> APIRouter:
     def compilation_status():
         return state.comp.snapshot()
 
-    @router.post("/api/compilation/cancel")
-    def cancel_compilation():
-        state.comp.cancelled = True
-        return {"status": "cancelling"}
-
     @router.get("/api/compilations")
     def list_compilations():
         """List all completed compilations."""
