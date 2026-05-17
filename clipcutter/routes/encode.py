@@ -1,4 +1,5 @@
 """Encoding endpoints."""
+import logging
 import os
 import threading
 from pathlib import Path
@@ -7,6 +8,8 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from clipcutter.config import DIR_CLIPS, DIR_COMPILATIONS, DIR_ENCODED, DIR_KEPT, DIR_METADATA
 from clipcutter.metadata import (
@@ -178,7 +181,11 @@ def create_router(state: AppState) -> APIRouter:
                 try:
                     encode_clip(input_path, output_path, preset, req.target_fps, req.slowdown_factor)
                     if meta_path.exists():
-                        update_clip_encoding(meta_path, clip_ref.filename, out_name, req.preset)
+                        if not update_clip_encoding(meta_path, clip_ref.filename, out_name, req.preset):
+                            logger.warning(
+                                "update_clip_encoding: no match for %s in %s",
+                                clip_ref.filename, meta_path,
+                            )
                     state.enc.add_completed(clip_ref.filename)
                 except Exception as exc:
                     state.enc.add_error(clip_ref.filename, str(exc))
@@ -223,7 +230,8 @@ def create_router(state: AppState) -> APIRouter:
             kept_path.parent.rmdir()
 
         if meta_path.exists():
-            update_clip_status(meta_path, filename, "discarded")
+            if not update_clip_status(meta_path, filename, "discarded"):
+                raise HTTPException(404, "Clip not found in metadata")
 
         return {"status": "deleted"}
 
@@ -286,7 +294,11 @@ def create_router(state: AppState) -> APIRouter:
             if enc_path.parent.is_dir() and not any(enc_path.parent.iterdir()):
                 enc_path.parent.rmdir()
 
-        clear_clip_encoding(meta_path, filename)
+        if not clear_clip_encoding(meta_path, filename):
+            logger.warning(
+                "clear_clip_encoding: no match for %s in %s",
+                filename, meta_path,
+            )
         return {"status": "deleted", "freed_mb": freed_mb}
 
     return router

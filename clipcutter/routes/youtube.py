@@ -1,10 +1,13 @@
 """YouTube upload and OAuth endpoints."""
+import logging
 from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from clipcutter.config import (
     DIR_CLIPS, DIR_ENCODED, DIR_KEPT, DIR_METADATA,
@@ -266,10 +269,14 @@ if (window.opener) {
 
                     meta_path = _safe_join(meta_base, f"{clip_req.video_stem}_clips.json")
                     if meta_path.exists():
-                        update_clip_youtube(
+                        if not update_clip_youtube(
                             meta_path, clip_req.filename,
                             result.video_id, result.url,
-                        )
+                        ):
+                            logger.warning(
+                                "update_clip_youtube: no match for %s in %s",
+                                clip_req.filename, meta_path,
+                            )
 
                     if clip_req.playlist_id and result.video_id:
                         try:
@@ -280,10 +287,14 @@ if (window.opener) {
                     state.upl.add_error(clip_req.filename, result.error or "Unknown error")
                     meta_path = _safe_join(meta_base, f"{clip_req.video_stem}_clips.json")
                     if meta_path.exists():
-                        update_clip_youtube(
+                        if not update_clip_youtube(
                             meta_path, clip_req.filename,
                             video_id="", url="", status="failed",
-                        )
+                        ):
+                            logger.warning(
+                                "update_clip_youtube: no match for %s in %s",
+                                clip_req.filename, meta_path,
+                            )
 
             state.upl.finish()
 

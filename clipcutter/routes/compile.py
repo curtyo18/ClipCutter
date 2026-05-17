@@ -1,5 +1,6 @@
 """Compilation endpoints."""
 import json
+import logging
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from clipcutter.config import DIR_CLIPS, DIR_COMPILATIONS, DIR_ENCODED, DIR_KEPT, DIR_METADATA
 from clipcutter.metadata import load_metadata
@@ -253,7 +256,11 @@ def create_router(state: AppState) -> APIRouter:
                                 except OSError:
                                     pass
                         from clipcutter.metadata import update_clip_status
-                        update_clip_status(clip_meta_path, filename, "deleted")
+                        if not update_clip_status(clip_meta_path, filename, "deleted"):
+                            logger.warning(
+                                "update_clip_status: no match for %s in %s",
+                                filename, clip_meta_path,
+                            )
                         break
 
         return {"status": "deleted", "deleted_count": len(deleted), "deleted": deleted}

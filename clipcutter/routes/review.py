@@ -357,12 +357,21 @@ def create_router(state: AppState) -> APIRouter:
                     quality=quality,
                 )
                 state.keep.update_step(task_id, "Updating metadata…")
-                update_clip_status(meta_path, filename, "kept")
+                if not update_clip_status(meta_path, filename, "kept"):
+                    raise RuntimeError(
+                        f"Metadata missing entry for {filename} in {meta_path}"
+                    )
                 if trimmed:
                     new_duration = sum(seg.end - seg.start for seg in segments)
-                    update_clip_duration(meta_path, filename, new_duration)
+                    if not update_clip_duration(meta_path, filename, new_duration):
+                        raise RuntimeError(
+                            f"Metadata missing entry for {filename} in {meta_path}"
+                        )
                 if custom_name:
-                    update_clip_custom_name(meta_path, filename, custom_name)
+                    if not update_clip_custom_name(meta_path, filename, custom_name):
+                        raise RuntimeError(
+                            f"Metadata missing entry for {filename} in {meta_path}"
+                        )
                 state.keep.finish(task_id, trimmed=trimmed)
             except Exception as e:
                 state.keep.finish(task_id, error=str(e))
@@ -384,7 +393,8 @@ def create_router(state: AppState) -> APIRouter:
         if not clip_path.exists():
             raise HTTPException(404, "Clip not found")
 
-        update_clip_status(meta_path, filename, "discarded")
+        if not update_clip_status(meta_path, filename, "discarded"):
+            raise HTTPException(404, "Clip not found in metadata")
         return {"status": "discarded"}
 
     return router
