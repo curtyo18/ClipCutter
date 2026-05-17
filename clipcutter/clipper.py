@@ -39,15 +39,28 @@ def compute_clip_boundaries(highlights: List[Highlight],
             highlights=[h],
         ))
 
-    # Merge overlapping or nearby clips
+    # Merge overlapping or nearby clips.
+    # NOTE: extend with a list(...) copy so each merged boundary owns its own
+    # highlights list — otherwise a later in-place mutation on the merged list
+    # can leak into the source boundaries we just consumed.
     merged = [boundaries[0]]
     for b in boundaries[1:]:
         prev = merged[-1]
         if b.start_time <= prev.end_time + config.CLIP_MERGE_GAP_SECONDS:
             prev.end_time = max(prev.end_time, b.end_time)
-            prev.highlights.extend(b.highlights)
+            prev.highlights.extend(list(b.highlights))
         else:
             merged.append(b)
+
+    # After all merges, drop any highlight whose timestamp falls outside its
+    # merged boundary's time range, and re-sort by timestamp. This guards the
+    # splitter against stale entries that shared list identity before the
+    # list(...) copy above was introduced.
+    for b in merged:
+        b.highlights = sorted(
+            (h for h in b.highlights if b.start_time <= h.timestamp <= b.end_time),
+            key=lambda h: h.timestamp,
+        )
 
     # Split clips that exceed max length
     final = []
@@ -60,8 +73,17 @@ def compute_clip_boundaries(highlights: List[Highlight],
     return final
 
 
+# Maximum recursion depth for _split_long_clip. At each level the clip is
+# halved, so depth=6 covers clips up to 64× CLIP_MAX_LENGTH_SECONDS — well
+# beyond any realistic input. The cap exists to terminate pathological cases
+# (e.g. overlapping highlights producing best_gap=0) where the chosen split
+# point would otherwise fail to make progress and recurse forever.
+MAX_SPLIT_DEPTH = 6
+
+
 def _split_long_clip(clip: ClipBoundary,
-                     video_duration: float) -> List[ClipBoundary]:
+                     video_duration: float,
+                     depth: int = 0) -> List[ClipBoundary]:
     """Split a clip that exceeds max length at the largest inter-highlight gap."""
     highlights = sorted(clip.highlights, key=lambda h: h.timestamp)
 
@@ -73,20 +95,44 @@ def _split_long_clip(clip: ClipBoundary,
             highlights=clip.highlights,
         )]
 
-    # Find the largest gap between consecutive highlights
-    best_gap = 0
-    best_idx = 0
-    for i in range(len(highlights) - 1):
-        gap = highlights[i + 1].timestamp - (highlights[i].timestamp + highlights[i].duration)
-        if gap > best_gap:
-            best_gap = gap
-            best_idx = i
+    # Depth bound. Even-halving is safe here because each half is strictly
+    # shorter than the parent, so eventually duration drops below
+    # CLIP_MAX_LENGTH_SECONDS even at MAX_SPLIT_DEPTH+1 (where the children
+    # bypass this branch and become leaves).
+    if depth >= MAX_SPLIT_DEPTH:
+        split_point = (clip.start_time + clip.end_time) / 2
+        best_idx = 0  # arbitrary partition for highlight ownership
+    else:
+        # Find the largest gap between consecutive highlights
+        best_gap = 0
+        best_idx = 0
+        for i in range(len(highlights) - 1):
+            gap = highlights[i + 1].timestamp - (highlights[i].timestamp + highlights[i].duration)
+            if gap > best_gap:
+                best_gap = gap
+                best_idx = i
 
-    # Split at the gap midpoint
-    split_point = (
-        highlights[best_idx].timestamp + highlights[best_idx].duration +
-        highlights[best_idx + 1].timestamp
-    ) / 2
+        # Split at the gap midpoint
+        split_point = (
+            highlights[best_idx].timestamp + highlights[best_idx].duration +
+            highlights[best_idx + 1].timestamp
+        ) / 2
+
+    # Clamp split_point into [start+MIN, end-MIN]. With overlapping highlights
+    # the midpoint can fall outside this band (or even outside the clip
+    # entirely), which would produce negative-duration sub-boundaries and
+    # break the recursion termination condition below.
+    min_split = clip.start_time + config.CLIP_MIN_LENGTH_SECONDS
+    max_split = clip.end_time - config.CLIP_MIN_LENGTH_SECONDS
+    if min_split > max_split:
+        # Clip is shorter than 2× CLIP_MIN_LENGTH; can't split into two valid
+        # halves. Fall back to a single truncated boundary.
+        return [ClipBoundary(
+            start_time=clip.start_time,
+            end_time=min(clip.start_time + config.CLIP_MAX_LENGTH_SECONDS, video_duration),
+            highlights=clip.highlights,
+        )]
+    split_point = max(min_split, min(split_point, max_split))
 
     left_highlights = highlights[:best_idx + 1]
     right_highlights = highlights[best_idx + 1:]
@@ -102,7 +148,7 @@ def _split_long_clip(clip: ClipBoundary,
     )
     if left.duration >= config.CLIP_MIN_LENGTH_SECONDS:
         if left.duration > config.CLIP_MAX_LENGTH_SECONDS:
-            result.extend(_split_long_clip(left, video_duration))
+            result.extend(_split_long_clip(left, video_duration, depth + 1))
         else:
             result.append(left)
 
@@ -113,7 +159,7 @@ def _split_long_clip(clip: ClipBoundary,
     )
     if right.duration >= config.CLIP_MIN_LENGTH_SECONDS:
         if right.duration > config.CLIP_MAX_LENGTH_SECONDS:
-            result.extend(_split_long_clip(right, video_duration))
+            result.extend(_split_long_clip(right, video_duration, depth + 1))
         else:
             result.append(right)
 
