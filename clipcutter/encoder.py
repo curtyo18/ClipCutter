@@ -64,12 +64,15 @@ def build_encode_command(input_path: Path, output_path: Path,
         vf = list(preset.ffmpeg_args)  # Starts with palette generation
         if slowdown_factor and slowdown_factor != 1.0:
             # Insert slowdown into filter chain: setpts=PTS/factor
-            # Replace the palette filter to include slowdown
+            # Replace the palette filter to include slowdown. The non-slowdown
+            # preset adds `-an` (GIF has no audio); add it here too so the
+            # slowdown branch doesn't emit a stream-not-mappable warning or
+            # silently keep an audio track on a GIF container.
             base_filter = (
                 f"split=2[m0][m1];[m0]palettegen[p];"
                 f"[m1]setpts=PTS/{slowdown_factor}[s];[s][p]paletteuse"
             )
-            cmd.extend(["-vf", base_filter])
+            cmd.extend(["-vf", base_filter, "-an"])
         else:
             cmd.extend(vf)
         cmd.append(str(output_path))

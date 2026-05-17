@@ -119,14 +119,19 @@ class TestAudioTimeouts:
                 audio.extract_clip(video, 0.0, 1.0, out)
 
     def test_extract_clip_wraps_reencode_timeout(self, tmp_path):
-        """If stream copy returns non-zero, the re-encode fallback also
-        gets a timeout that wraps to FFmpegTimeoutError."""
+        """If stream copy returns non-zero with a recoverable-pattern stderr,
+        the re-encode fallback fires; a timeout there wraps to FFmpegTimeoutError.
+
+        (Non-recoverable stream-copy failures now raise RuntimeError without
+        attempting re-encode — see test_extract_clip_surfaces_unrecognized_stderr.)
+        """
         video = tmp_path / "vid.mp4"
         video.write_bytes(b"x")
         out = tmp_path / "clip.mp4"
 
         copy_fail = MagicMock()
         copy_fail.returncode = 1
+        copy_fail.stderr = "[mp4 @ 0x...] Could not find tag for codec\n"
 
         with patch(
             "clipcutter.audio.subprocess.run",
@@ -137,6 +142,105 @@ class TestAudioTimeouts:
         ):
             with pytest.raises(FFmpegTimeoutError, match="re-encoding clip"):
                 audio.extract_clip(video, 0.0, 1.0, out)
+
+
+class TestExtractClipStderrSurfacing:
+    """extract_clip should surface unrecognized stream-copy stderr instead of
+    silently re-encoding. Only known-recoverable codec/container errors
+    should trigger the fallback path."""
+
+    def _failed_copy(self, stderr_text: str):
+        result = MagicMock()
+        result.returncode = 1
+        result.stderr = stderr_text
+        return result
+
+    def _ok_reencode(self):
+        result = MagicMock()
+        result.returncode = 0
+        return result
+
+    def test_unrecognized_error_raises_without_reencode(self, tmp_path):
+        """A "No such file" stderr should NOT trigger fallback — that's a
+        typo / missing source, not a codec quirk. Raise RuntimeError with
+        the stderr tail so the user can see the root cause."""
+        video = tmp_path / "vid.mp4"
+        video.write_bytes(b"x")
+        out = tmp_path / "clip.mp4"
+
+        copy_fail = self._failed_copy(
+            "ffmpeg: No such file or directory: '/typo/path.mp4'\n"
+        )
+
+        with patch(
+            "clipcutter.audio.subprocess.run", side_effect=[copy_fail],
+        ) as mrun:
+            with pytest.raises(RuntimeError, match="stream-copy failed"):
+                audio.extract_clip(video, 0.0, 1.0, out)
+
+        # No second subprocess.run call (the re-encode branch shouldn't fire).
+        assert mrun.call_count == 1, (
+            "Re-encode fallback fired on an unrecognized error — should have raised."
+        )
+
+    @pytest.mark.parametrize("stderr_text", [
+        "Invalid stream specifier 'a:0'.\n",
+        "[mp4 @ 0x...] Could not find tag for codec hevc in stream #0\n",
+        "Output container does not support codec\n",
+        "Codec is NOT SUPPORTED in this format\n",  # uppercase to test case-insensitive
+    ])
+    def test_recoverable_error_triggers_reencode(self, tmp_path, stderr_text):
+        """The four known fallback-worthy patterns must trigger the re-encode
+        branch (case-insensitive substring match)."""
+        video = tmp_path / "vid.mp4"
+        video.write_bytes(b"x")
+        out = tmp_path / "clip.mp4"
+
+        copy_fail = self._failed_copy(stderr_text)
+        with patch(
+            "clipcutter.audio.subprocess.run",
+            side_effect=[copy_fail, self._ok_reencode()],
+        ) as mrun:
+            audio.extract_clip(video, 0.0, 1.0, out)
+
+        assert mrun.call_count == 2, (
+            f"Recoverable stderr ({stderr_text!r}) should have triggered re-encode."
+        )
+
+    def test_extract_audio_probe_failure_raises_clear_error(self, tmp_path):
+        """When ffprobe itself fails (corrupt file, missing path), the error
+        message should mention "probe", not the misleading "No audio stream"."""
+        video = tmp_path / "vid.mp4"
+        video.write_bytes(b"x")
+        out = tmp_path / "out"
+
+        with patch(
+            "clipcutter.audio.subprocess.run",
+            side_effect=subprocess.CalledProcessError(
+                returncode=1, cmd="ffprobe",
+                output="", stderr="Invalid data found when processing input\n",
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="ffprobe failed to probe"):
+                audio.extract_audio(video, out)
+
+    def test_extract_audio_no_stream_still_raises_NoAudioStreamError(self, tmp_path):
+        """The check=True change must NOT change the "no audio stream" path —
+        a successful ffprobe call that returns empty stdout still raises
+        NoAudioStreamError."""
+        video = tmp_path / "vid.mp4"
+        video.write_bytes(b"x")
+        out = tmp_path / "out"
+
+        probe = MagicMock()
+        probe.stdout = ""   # ffprobe succeeded but found no audio stream
+        probe.stderr = ""
+
+        with patch(
+            "clipcutter.audio.subprocess.run", side_effect=[probe],
+        ):
+            with pytest.raises(audio.NoAudioStreamError, match="No audio stream"):
+                audio.extract_audio(video, out)
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +295,44 @@ class TestEncoderTimeouts:
                 encoder.encode_clip(inp, outp, self._preset_with_args())
 
         assert not outp.exists(), "partial output should be deleted on timeout"
+
+
+class TestGifSlowdownAudioDrop:
+    """The GIF preset's slowdown branch must include `-an` for parity
+    with the non-slowdown branch — without it, ffmpeg either emits a
+    warning ("Stream specifier 'a:0' does not match any streams") or
+    keeps an audio stream that's never going to play in a GIF."""
+
+    def _gif_preset(self):
+        from clipcutter.encoder import get_presets
+        return get_presets()["gif"]
+
+    def test_gif_slowdown_command_includes_dash_an(self, tmp_path):
+        from clipcutter.encoder import build_encode_command
+
+        cmd = build_encode_command(
+            tmp_path / "in.mp4", tmp_path / "out.gif",
+            self._gif_preset(),
+            target_fps=None, slowdown_factor=0.5,
+        )
+        assert cmd is not None
+        assert "-an" in cmd, (
+            "GIF slowdown branch must include -an for parity with the "
+            f"non-slowdown branch. cmd={cmd!r}"
+        )
+
+    def test_gif_no_slowdown_still_has_dash_an(self, tmp_path):
+        """Regression guard: the non-slowdown branch already had -an
+        (via config.ENCODING_PRESETS); make sure it still does."""
+        from clipcutter.encoder import build_encode_command
+
+        cmd = build_encode_command(
+            tmp_path / "in.mp4", tmp_path / "out.gif",
+            self._gif_preset(),
+            target_fps=None, slowdown_factor=None,
+        )
+        assert cmd is not None
+        assert "-an" in cmd, f"GIF preset must always include -an. cmd={cmd!r}"
 
 
 # ---------------------------------------------------------------------------

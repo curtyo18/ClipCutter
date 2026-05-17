@@ -157,7 +157,12 @@ def create_router(state: AppState) -> APIRouter:
         if not meta_dir.exists():
             return {"compilations": []}
 
-        for meta_path in sorted(meta_dir.glob("comp_*.json")):
+        # Tight glob: compilation metadata files are named
+        # comp_YYYYMMDD_HHMMSS.json (set when start_compilation builds the
+        # comp_id). A loose "comp_*.json" would also match per-video
+        # clip metadata for any video named like "comp_2024_finale.mp4",
+        # which would surface a non-compilation file as if it were one.
+        for meta_path in sorted(meta_dir.glob("comp_????????_??????.json")):
             try:
                 data = json.loads(meta_path.read_text(encoding="utf-8"))
                 data.setdefault("clip_count", len(data.get("clips", [])))
@@ -174,27 +179,43 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.delete("/api/compilation/{compilation_id}")
     def delete_compilation(compilation_id: str):
+        """Delete a compilation's metadata + video file.
+
+        Returns leftover_files (paths relative to output_dir) when the .mp4
+        couldn't be removed — previously this exception was swallowed and
+        the response claimed success even when the file was still on disk.
+        """
         meta_base = state.output_dir / DIR_METADATA
         comp_base = state.output_dir / DIR_CLIPS / DIR_COMPILATIONS
         meta_path = _safe_join(meta_base, f"{compilation_id}.json")
         if not meta_path.exists():
             raise HTTPException(404, "Compilation not found")
 
+        leftover_files: list[str] = []
         try:
             data = json.loads(meta_path.read_text(encoding="utf-8"))
-            comp_filename = data.get("filename", "")
-            if comp_filename:
+        except (json.JSONDecodeError, OSError):
+            data = {}
+
+        comp_filename = data.get("filename", "") if isinstance(data, dict) else ""
+        if comp_filename:
+            try:
+                video_path = _safe_join(comp_base, comp_filename)
+            except HTTPException:
+                video_path = None
+            if video_path is not None and video_path.exists():
                 try:
-                    video_path = _safe_join(comp_base, comp_filename)
-                except HTTPException:
-                    video_path = None
-                if video_path is not None and video_path.exists():
                     video_path.unlink()
-        except Exception:
-            pass
+                except OSError:
+                    try:
+                        leftover_files.append(
+                            str(video_path.relative_to(state.output_dir))
+                        )
+                    except ValueError:
+                        leftover_files.append(video_path.name)
 
         meta_path.unlink()
-        return {"status": "deleted"}
+        return {"status": "deleted", "leftover_files": leftover_files}
 
     @router.delete("/api/compilation/{compilation_id}/sources")
     def delete_compilation_sources(compilation_id: str):

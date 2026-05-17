@@ -62,7 +62,11 @@ def extract_audio(video_path: Path, output_dir: Path,
         if wav_path.stat().st_mtime >= video_path.stat().st_mtime:
             return wav_path
 
-    # Check for audio stream
+    # Check for audio stream. check=True so a probe failure (corrupt file,
+    # bad path, unsupported container) raises CalledProcessError instead of
+    # being misreported downstream as "No audio stream found" — that
+    # message is reserved for the case where ffprobe runs successfully
+    # but reports no audio streams in the file.
     probe_cmd = [
         "ffprobe", "-v", "error",
         "-select_streams", "a",
@@ -73,12 +77,17 @@ def extract_audio(video_path: Path, output_dir: Path,
     try:
         probe = subprocess.run(
             probe_cmd,
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=True,
             timeout=FFPROBE_TIMEOUT,
         )
     except subprocess.TimeoutExpired as exc:
         raise FFmpegTimeoutError(
             f"ffprobe timed out after {FFPROBE_TIMEOUT}s probing audio stream of {video_path}"
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        stderr_tail = (exc.stderr or "")[-500:]
+        raise RuntimeError(
+            f"ffprobe failed to probe {video_path}: {stderr_tail}"
         ) from exc
     if not probe.stdout.strip():
         raise NoAudioStreamError(f"No audio stream in {video_path}")
@@ -103,6 +112,27 @@ def extract_audio(video_path: Path, output_dir: Path,
             f"ffmpeg timed out after {FFMPEG_EXTRACT_AUDIO_TIMEOUT}s extracting audio from {video_path}"
         ) from exc
     return wav_path
+
+
+# Substrings (case-insensitive) in ffmpeg stderr that justify falling back
+# to the re-encode path. Anything else (typo in path, missing source,
+# permission denied, etc.) should surface as a real error instead of
+# silently triggering a re-encode that will fail with the same message.
+_STREAM_COPY_FALLBACK_PATTERNS = (
+    "stream specifier",
+    "could not find tag for codec",
+    "container does not support",
+    "not supported",
+)
+
+
+def _is_recoverable_stream_copy_error(stderr: str) -> bool:
+    """Return True if stderr matches a known codec/container incompatibility
+    that the re-encode fallback can fix."""
+    if not stderr:
+        return False
+    lowered = stderr.lower()
+    return any(p in lowered for p in _STREAM_COPY_FALLBACK_PATTERNS)
 
 
 def extract_clip(video_path: Path, start: float, end: float,
@@ -131,8 +161,19 @@ def extract_clip(video_path: Path, start: float, end: float,
             f"ffmpeg timed out after {FFMPEG_EXTRACT_CLIP_TIMEOUT}s extracting clip from {video_path}"
         ) from exc
 
-    # If stream copy fails, fall back to re-encoding
+    # If stream copy fails, only fall back to re-encoding when stderr matches
+    # a known codec/container-incompatibility pattern. Other failures (bad
+    # path, missing source, permission denied) used to cascade silently into
+    # the re-encode branch and surface as the same generic error twice — now
+    # they raise with the real stderr so the root cause is visible.
     if result.returncode != 0:
+        stderr = result.stderr or ""
+        if not _is_recoverable_stream_copy_error(stderr):
+            stderr_tail = stderr[-500:]
+            raise RuntimeError(
+                f"ffmpeg stream-copy failed: {stderr_tail}"
+            )
+
         reencode_cmd = [
             "ffmpeg", "-y",
             "-ss", f"{start:.3f}",

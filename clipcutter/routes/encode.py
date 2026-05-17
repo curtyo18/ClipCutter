@@ -295,7 +295,13 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.delete("/api/kept/{video_stem}/{filename}")
     def delete_kept_clip(video_stem: str, filename: str):
-        """Delete a kept clip file and mark it as discarded in metadata."""
+        """Delete a kept clip file and mark it as discarded in metadata.
+
+        Returns leftover_files (paths relative to output_dir) for anything
+        in the parent folder that couldn't be removed — e.g. a .waveform.json
+        sidecar or a stray encoded file. Same shape as delete_source so the
+        UI can warn the user instead of silently lying about success.
+        """
         kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
         meta_base = state.output_dir / DIR_METADATA
         kept_path = _safe_join(kept_base, video_stem, filename)
@@ -306,15 +312,33 @@ def create_router(state: AppState) -> APIRouter:
 
         kept_path.unlink()
 
-        # Remove the parent folder if it's now empty
-        if kept_path.parent.is_dir() and not any(kept_path.parent.iterdir()):
-            kept_path.parent.rmdir()
+        # Try to remove the parent folder if it's now empty. If it isn't,
+        # surface the leftover paths so the caller knows the cleanup was
+        # partial (e.g. a waveform sidecar persisted, or an encoded file
+        # lingered in a sibling directory of the same stem).
+        leftover_files: list[str] = []
+        parent = kept_path.parent
+        if parent.is_dir():
+            remaining = sorted(parent.iterdir())
+            if remaining:
+                for f in remaining:
+                    try:
+                        leftover_files.append(
+                            str(f.relative_to(state.output_dir))
+                        )
+                    except ValueError:
+                        leftover_files.append(f.name)
+            else:
+                try:
+                    parent.rmdir()
+                except OSError:
+                    pass
 
         if meta_path.exists():
             if not update_clip_status(meta_path, filename, "discarded"):
                 raise HTTPException(404, "Clip not found in metadata")
 
-        return {"status": "deleted"}
+        return {"status": "deleted", "leftover_files": leftover_files}
 
     @router.get("/api/open-folder/kept/{video_stem}")
     def open_folder(video_stem: str):

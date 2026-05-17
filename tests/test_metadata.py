@@ -161,6 +161,88 @@ class TestOptionalFieldsOmitted:
                 f"Optional field '{optional_key}' should not be serialized when None"
             )
 
+        # highlight_regions now defaults to [], not None. Empty lists are
+        # also omitted from serialized output to keep the JSON tight
+        # (matches the pre-existing behavior of omitting falsy values).
+        assert "highlight_regions" not in clip_dict, (
+            "Empty highlight_regions list should not appear in serialized JSON"
+        )
+
+
+class TestHighlightRegionsDefault:
+    """highlight_regions defaults to [] (not None) and from_dict coerces
+    a null/missing value to [] for backward compat with older metadata
+    files written when the field was Optional[List[dict]] = None."""
+
+    def test_default_is_empty_list_not_none(self):
+        clip = ClipMetadata(
+            filename="clip_001.mp4",
+            source_video="/videos/test.mp4",
+            start_time=0.0, end_time=10.0, duration=10.0,
+            detection_reasons=["volume_spike"], confidence=0.8,
+        )
+        assert clip.highlight_regions == []
+        # Iteration is safe without a None check (the whole point):
+        for _ in clip.highlight_regions:
+            pass
+
+    def test_from_dict_coerces_null_to_empty_list(self):
+        """Older metadata files have `"highlight_regions": null` in the JSON.
+        load_metadata must coerce that to [] so call sites can iterate."""
+        legacy = {
+            "filename": "clip_001.mp4",
+            "source_video": "/videos/test.mp4",
+            "start_time": 0.0, "end_time": 10.0, "duration": 10.0,
+            "detection_reasons": ["volume_spike"], "confidence": 0.8,
+            "highlight_regions": None,
+        }
+        clip = ClipMetadata.from_dict(legacy)
+        assert clip.highlight_regions == []
+
+    def test_from_dict_handles_missing_key(self):
+        """Even-older metadata files predate the field. Must default to []."""
+        legacy = {
+            "filename": "clip_001.mp4",
+            "source_video": "/videos/test.mp4",
+            "start_time": 0.0, "end_time": 10.0, "duration": 10.0,
+            "detection_reasons": ["volume_spike"], "confidence": 0.8,
+        }
+        clip = ClipMetadata.from_dict(legacy)
+        assert clip.highlight_regions == []
+
+    def test_from_dict_preserves_populated_list(self):
+        """Sanity: a real highlight_regions list survives roundtripping."""
+        regions = [
+            {"offset": 1.0, "duration": 0.5, "type": "volume_spike", "confidence": 0.9},
+        ]
+        data = {
+            "filename": "clip_001.mp4",
+            "source_video": "/videos/test.mp4",
+            "start_time": 0.0, "end_time": 10.0, "duration": 10.0,
+            "detection_reasons": ["volume_spike"], "confidence": 0.8,
+            "highlight_regions": regions,
+        }
+        clip = ClipMetadata.from_dict(data)
+        assert clip.highlight_regions == regions
+
+    def test_populated_regions_serialized(self, meta_dir):
+        """A non-empty highlight_regions list IS serialized (the omit-when-empty
+        rule mirrors the None-omit behavior of the other optional fields)."""
+        clip = ClipMetadata(
+            filename="clip_001.mp4",
+            source_video="/videos/test.mp4",
+            start_time=0.0, end_time=10.0, duration=10.0,
+            detection_reasons=["volume_spike"], confidence=0.8,
+            highlight_regions=[
+                {"offset": 0.5, "duration": 1.0, "type": "laughter", "confidence": 0.7},
+            ],
+        )
+        meta_path = save_metadata([clip], "/videos/test.mp4", meta_dir)
+        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+        assert raw["clips"][0]["highlight_regions"] == [
+            {"offset": 0.5, "duration": 1.0, "type": "laughter", "confidence": 0.7},
+        ]
+
 
 class TestDurationUpdate:
     """update_clip_duration persists the new duration correctly."""

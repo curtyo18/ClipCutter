@@ -161,9 +161,14 @@ class TestCompilationList:
     ):
         meta_dir = output_dir / "metadata"
         meta_dir.mkdir(parents=True, exist_ok=True)
+        # Use the canonical comp_YYYYMMDD_HHMMSS name so the tightened
+        # list_compilations glob matches. The "legacy" aspect under test is
+        # the absent clip_count field (older writers didn't emit it), not
+        # a non-standard filename.
+        comp_id = "comp_20260101_000000"
         legacy = {
-            "compilation_id": "comp_legacy",
-            "filename": "comp_legacy.mp4",
+            "compilation_id": comp_id,
+            "filename": f"{comp_id}.mp4",
             "created_at": "2026-01-01T00:00:00",
             "clips": [
                 {"video_stem": "legacy", "filename": "a.mp4", "duration": 1.0},
@@ -174,13 +179,13 @@ class TestCompilationList:
             "total_duration": 3.0,
             "status": "complete",
         }
-        (meta_dir / "comp_legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
+        (meta_dir / f"{comp_id}.json").write_text(json.dumps(legacy), encoding="utf-8")
 
         resp = app_client.get("/api/compilations")
         assert resp.status_code == 200
         legacy_entry = next(
             c for c in resp.json()["compilations"]
-            if c["compilation_id"] == "comp_legacy"
+            if c["compilation_id"] == comp_id
         )
         assert legacy_entry["clip_count"] == 3
 
@@ -198,6 +203,144 @@ class TestCompilationServe:
         resp = app_client.get("/video/compilation/foo.mp4")
         assert resp.status_code == 200
         assert resp.content == body
+
+
+class TestCompilationListGlobSpecificity:
+    """list_compilations should only match comp_YYYYMMDD_HHMMSS.json,
+    not arbitrary comp_*.json files like per-video clip metadata for
+    a video stem starting with `comp_`."""
+
+    def test_does_not_match_video_clip_metadata_named_like_compilation(
+        self, output_dir, app_client
+    ):
+        """A video file named `comp_2024_finale.mp4` produces a metadata
+        file `comp_2024_finale_clips.json` — which used to match the loose
+        `comp_*.json` glob and surface as a (broken) "compilation"."""
+        meta_dir = output_dir / "metadata"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+
+        # Lookalike clip metadata: a real video stem that just happens
+        # to start with "comp_". This is a clips file, not a compilation.
+        (meta_dir / "comp_2024_finale_clips.json").write_text(
+            json.dumps({
+                "source_video": "/videos/comp_2024_finale.mp4",
+                "processed_at": "2026-01-01T00:00:00",
+                "clip_count": 1,
+                "clips": [{
+                    "filename": "clip_001.mp4",
+                    "source_video": "/videos/comp_2024_finale.mp4",
+                    "start_time": 0.0, "end_time": 10.0, "duration": 10.0,
+                    "detection_reasons": ["volume_spike"], "confidence": 0.8,
+                    "status": "kept",
+                }],
+            }),
+            encoding="utf-8",
+        )
+
+        # And a real compilation file alongside it.
+        comp_id = "comp_20260102_120000"
+        (meta_dir / f"{comp_id}.json").write_text(
+            json.dumps({
+                "compilation_id": comp_id,
+                "filename": f"{comp_id}.mp4",
+                "created_at": "2026-01-02T12:00:00",
+                "clips": [],
+                "transition": "cut",
+                "total_duration": 0.0,
+                "status": "complete",
+            }),
+            encoding="utf-8",
+        )
+
+        resp = app_client.get("/api/compilations")
+        assert resp.status_code == 200
+        ids = [c.get("compilation_id") for c in resp.json()["compilations"]]
+        assert comp_id in ids, (
+            f"Real compilation should appear in list. Got: {ids!r}"
+        )
+        # The lookalike must NOT appear:
+        assert not any(
+            (i or "").startswith("comp_2024_finale") for i in ids
+        ), f"Clip metadata for comp_2024_finale must NOT be listed. Got: {ids!r}"
+
+
+class TestDeleteCompilationLeftoverFiles:
+    """delete_compilation surfaces leftover_files when the .mp4 can't be
+    removed, instead of swallowing the OSError and lying about success."""
+
+    @staticmethod
+    def _setup(output_dir, comp_id="comp_20260103_090000"):
+        meta_dir = output_dir / "metadata"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        comp_dir = output_dir / "clips" / "compilations"
+        comp_dir.mkdir(parents=True, exist_ok=True)
+
+        video_filename = f"{comp_id}.mp4"
+        (comp_dir / video_filename).write_bytes(b"fake-comp-bytes")
+        (meta_dir / f"{comp_id}.json").write_text(
+            json.dumps({
+                "compilation_id": comp_id,
+                "filename": video_filename,
+                "created_at": "2026-01-03T09:00:00",
+                "clips": [], "transition": "cut",
+                "total_duration": 0.0, "status": "complete",
+            }),
+            encoding="utf-8",
+        )
+        return comp_id, video_filename
+
+    def test_clean_delete_returns_empty_leftover_files(self, output_dir, app_client):
+        comp_id, video_filename = self._setup(output_dir)
+        resp = app_client.delete(f"/api/compilation/{comp_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "deleted"
+        assert data["leftover_files"] == []
+        # Both files actually gone
+        assert not (output_dir / "metadata" / f"{comp_id}.json").exists()
+        assert not (output_dir / "clips" / "compilations" / video_filename).exists()
+
+    def test_failed_video_unlink_reports_leftover(
+        self, output_dir, app_client, monkeypatch
+    ):
+        """Patch Path.unlink for the comp .mp4 to raise OSError. Response
+        should still be 200 but leftover_files should contain the .mp4."""
+        from pathlib import Path as _Path
+
+        comp_id, video_filename = self._setup(output_dir)
+        comp_mp4 = output_dir / "clips" / "compilations" / video_filename
+        meta_json = output_dir / "metadata" / f"{comp_id}.json"
+
+        original_unlink = _Path.unlink
+
+        def fake_unlink(self_path, *args, **kwargs):
+            # Refuse to delete just the .mp4 — let the metadata .json unlink
+            # succeed so the rest of the cleanup happens.
+            if self_path == comp_mp4:
+                raise OSError("simulated unlink failure")
+            return original_unlink(self_path, *args, **kwargs)
+
+        monkeypatch.setattr(_Path, "unlink", fake_unlink)
+
+        resp = app_client.delete(f"/api/compilation/{comp_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "deleted"
+        # The mp4 path is reported relative to output_dir.
+        assert data["leftover_files"], (
+            "leftover_files must be non-empty when the .mp4 unlink fails"
+        )
+        # The path should be relative to output_dir, e.g.
+        # "clips/compilations/comp_20260103_090000.mp4"
+        leftover = data["leftover_files"][0]
+        assert video_filename in leftover, (
+            f"Leftover entry should reference the .mp4 by name. Got: {leftover!r}"
+        )
+
+        # The metadata json IS gone (no longer claiming the file exists).
+        assert not meta_json.exists()
+        # The .mp4 is still on disk because unlink was refused.
+        assert comp_mp4.exists()
 
 
 class TestCompilationDelete:

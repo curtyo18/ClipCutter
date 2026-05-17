@@ -271,6 +271,97 @@ class TestDeleteKeptClip:
         assert not kept_dir.exists(), "Empty kept folder should be removed after last clip deleted"
 
 
+class TestDeleteKeptClipLeftoverFiles:
+    """delete_kept_clip surfaces leftover_files when the parent folder
+    isn't empty after the unlink (e.g., a .waveform.json sidecar persists,
+    or a sibling clip wasn't selected for deletion). Mirrors the shape
+    used by delete_source so the UI can warn the user.
+
+    Tests below write files directly (no ffmpeg) — the delete route only
+    needs the file to exist, not to be a valid video.
+    """
+
+    def _setup_kept(self, output_dir: Path, stem: str, filename: str) -> Path:
+        kept_dir = output_dir / "clips" / "kept" / stem
+        kept_dir.mkdir(parents=True, exist_ok=True)
+        kept_path = kept_dir / filename
+        kept_path.write_bytes(b"fake-kept-bytes")
+
+        # Minimal metadata so the delete route's update_clip_status finds
+        # the entry it's looking for.
+        meta_dir = output_dir / "metadata"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / f"{stem}_clips.json").write_text(json.dumps({
+            "source_video": f"/fake/{stem}.mp4",
+            "processed_at": "2026-01-01T00:00:00",
+            "clip_count": 1,
+            "clips": [{
+                "filename": filename,
+                "source_video": f"/fake/{stem}.mp4",
+                "start_time": 0.0, "end_time": 10.0, "duration": 10.0,
+                "detection_reasons": ["volume_spike"], "confidence": 0.8,
+                "status": "kept",
+            }],
+        }), encoding="utf-8")
+        return kept_path
+
+    def test_clean_delete_returns_empty_leftover_files(self, output_dir, app_client):
+        stem = "leftover_clean"
+        kept_path = self._setup_kept(output_dir, stem, "clip_001.mp4")
+        assert kept_path.exists()
+
+        resp = app_client.delete(f"/api/kept/{stem}/clip_001.mp4")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "deleted"
+        assert data["leftover_files"] == []
+        # Parent folder removed when empty
+        assert not kept_path.parent.exists()
+
+    def test_waveform_sidecar_reported_as_leftover(self, output_dir, app_client):
+        stem = "leftover_waveform"
+        kept_path = self._setup_kept(output_dir, stem, "clip_001.mp4")
+        # Drop a sidecar that the delete route doesn't sweep.
+        sidecar = kept_path.with_suffix(".mp4.waveform.json")
+        sidecar.write_text('{"waveform": [], "duration": 0}', encoding="utf-8")
+
+        resp = app_client.delete(f"/api/kept/{stem}/clip_001.mp4")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "deleted"
+        # leftover_files should mention the sidecar (path relative to
+        # output_dir; matches delete_source's shape).
+        assert data["leftover_files"], (
+            "leftover_files must list the waveform sidecar"
+        )
+        # Each entry is a relative path string.
+        assert any("waveform" in p for p in data["leftover_files"]), (
+            f"Expected waveform sidecar in leftover_files. Got: {data['leftover_files']!r}"
+        )
+        # Sidecar still on disk; the kept clip itself is gone.
+        assert sidecar.exists()
+        assert not kept_path.exists()
+        # Parent folder still exists because the sidecar is in it.
+        assert kept_path.parent.exists()
+
+    def test_sibling_clip_reported_as_leftover(self, output_dir, app_client):
+        """Another kept clip in the same stem folder must be reported as
+        leftover when only one is deleted — the folder cleanup is
+        per-clip but the response should not lie about the folder state."""
+        stem = "leftover_sibling"
+        kept_a = self._setup_kept(output_dir, stem, "clip_a.mp4")
+        kept_b_path = kept_a.parent / "clip_b.mp4"
+        kept_b_path.write_bytes(b"fake-kept-bytes-b")
+
+        resp = app_client.delete(f"/api/kept/{stem}/clip_a.mp4")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "deleted"
+        assert any("clip_b" in p for p in data["leftover_files"]), (
+            f"Sibling clip should appear in leftover_files. Got: {data['leftover_files']!r}"
+        )
+
+
 class TestOpenFolder:
     def test_open_folder_not_found_returns_404(self, output_dir, app_client):
         resp = app_client.get("/api/open-folder/kept/no_such_stem")
