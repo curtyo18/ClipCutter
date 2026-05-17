@@ -289,11 +289,11 @@ class TestExportTabBrowser:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/expvid.mp4")
 
-        # Keep it via API (wait for the async worker to land before driving the UI)
-        from starlette.testclient import TestClient
-        app = create_app(output_dir)
-        client = TestClient(app)
-        keep_and_wait(client, stem, "clip_001.mp4",
+        # Keep it via the live server's HTTP API (the same backend the browser
+        # hits) and wait for the async worker to land before driving the UI.
+        # Using a second TestClient(create_app(output_dir)) here would build a
+        # parallel AppState whose state.keep is invisible to the live server.
+        keep_and_wait(url, stem, "clip_001.mp4",
                       json_body={"trim_start": 0.0, "trim_end": 0.0,
                                  "custom_name": "Export Test"})
 
@@ -359,11 +359,9 @@ class TestPlayerVolumePersistence:
         )
         save_test_metadata(output_dir, stem, [clip], "/fake/volpreview.mp4")
 
-        # Mark the clip as kept so it shows up on the Export tab.
-        from starlette.testclient import TestClient
-        app = create_app(output_dir)
-        client = TestClient(app)
-        keep_and_wait(client, stem, "clip_001.mp4",
+        # Mark the clip as kept (via the live server's HTTP API — same backend
+        # the browser hits) so it shows up on the Export tab.
+        keep_and_wait(url, stem, "clip_001.mp4",
                       json_body={"segments": [], "custom_name": None})
 
         page.goto(url)
