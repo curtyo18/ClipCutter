@@ -175,7 +175,15 @@ class EncodingState:
 
 
 class UploadState:
-    """Thread-safe upload state."""
+    """Thread-safe upload state.
+
+    cancel_event drives between-chunk cancellation inside upload_video,
+    so a stalled-but-eventually-progressing TCP transfer can be aborted
+    without waiting for the next clip. The .cancelled property keeps
+    the legacy bool-ish API working for routes/snapshot consumers (the
+    FE expects {"cancelled": bool} in the status payload), same pattern
+    as EncodingState.
+    """
 
     def __init__(self):
         self.running = False
@@ -186,8 +194,19 @@ class UploadState:
         self.bytes_total: int = 0
         self.completed: list[dict] = []
         self.errors: list[dict] = []
-        self.cancelled = False
+        self.cancel_event = threading.Event()
         self._lock = threading.Lock()
+
+    @property
+    def cancelled(self) -> bool:
+        return self.cancel_event.is_set()
+
+    @cancelled.setter
+    def cancelled(self, value: bool) -> None:
+        if value:
+            self.cancel_event.set()
+        else:
+            self.cancel_event.clear()
 
     def reset(self, total: int):
         with self._lock:
@@ -199,7 +218,9 @@ class UploadState:
             self.bytes_total = 0
             self.completed = []
             self.errors = []
-            self.cancelled = False
+            # cancel_event manipulation is atomic — clearing under the
+            # lock keeps "reset is one consistent snapshot" intact.
+            self.cancel_event.clear()
 
     def set_current(self, filename: str, index: int):
         with self._lock:
@@ -237,7 +258,7 @@ class UploadState:
                 "bytes_total": self.bytes_total,
                 "completed": list(self.completed),
                 "errors": list(self.errors),
-                "cancelled": self.cancelled,
+                "cancelled": self.cancel_event.is_set(),
             }
 
 

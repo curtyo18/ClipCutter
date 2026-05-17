@@ -1,16 +1,23 @@
 """YouTube Data API v3 integration for uploading clips."""
 
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Union
 from urllib.parse import urlencode
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-
 from clipcutter import config
+
+# Per-chunk HTTP timeout (seconds). A stalled TCP socket inside
+# next_chunk() would otherwise wedge the upload worker forever, so we
+# install this on the httplib2 transport used by the YouTube client.
+YOUTUBE_HTTP_TIMEOUT_SECONDS = 120
+
+# Retry budget for each chunk's HTTPS PUT. googleapiclient retries with
+# exponential backoff on transient network errors when num_retries > 0,
+# but eventually gives up so cancellation can take effect.
+YOUTUBE_CHUNK_RETRIES = 3
 
 
 @dataclass
@@ -25,11 +32,17 @@ class YouTubeCredentials:
 
 @dataclass
 class UploadResult:
-    """Result of a YouTube upload attempt."""
+    """Result of a YouTube upload attempt.
+
+    cancelled distinguishes a user-initiated abort (event set mid-upload)
+    from a genuine error, so the route can render a "Cancelled" pill
+    instead of a red error banner.
+    """
     success: bool
     video_id: Optional[str] = None
     error: Optional[str] = None
     url: Optional[str] = None
+    cancelled: bool = False
 
 
 def get_auth_url(client_id: str, redirect_uri: str) -> str:
@@ -127,16 +140,31 @@ def load_credentials(path: Path) -> Optional[YouTubeCredentials]:
         return None
 
 
-def get_authenticated_service(creds: YouTubeCredentials):
+def get_authenticated_service(creds: YouTubeCredentials,
+                              timeout: int = YOUTUBE_HTTP_TIMEOUT_SECONDS):
     """Return a YouTube API service with auto-refreshing credentials.
 
     The google.oauth2.credentials.Credentials object handles token refresh
     automatically when refresh_token and token_uri are provided.
 
+    A per-request HTTP timeout is installed on the httplib2 transport so
+    a wedged TCP socket inside an upload chunk can't pin the worker
+    indefinitely — every next_chunk() will surface a socket.timeout that
+    next_chunk's own retry logic (num_retries) can recover from, and the
+    upload loop's cancel check still gets a chance to fire between chunks.
+
     Returns:
         Tuple of (service, YouTubeCredentials) where credentials may have
         an updated access_token after refresh.
     """
+    # Lazy imports keep clipcutter.youtube importable in test/dev
+    # environments without the google/googleapiclient deps installed
+    # (so tests can patch clipcutter.youtube.build at the module level).
+    import httplib2
+    from google.oauth2.credentials import Credentials
+    from google_auth_httplib2 import AuthorizedHttp
+    from googleapiclient.discovery import build
+
     google_creds = Credentials(
         token=creds.access_token,
         refresh_token=creds.refresh_token,
@@ -145,7 +173,10 @@ def get_authenticated_service(creds: YouTubeCredentials):
         client_secret=creds.client_secret,
         scopes=config.YOUTUBE_SCOPES,
     )
-    service = build("youtube", "v3", credentials=google_creds)
+    # Build an authorized httplib2 with the timeout baked in. We can't
+    # pass both credentials= and http= to build(), so wrap manually.
+    authed_http = AuthorizedHttp(google_creds, http=httplib2.Http(timeout=timeout))
+    service = build("youtube", "v3", http=authed_http)
 
     # Return updated creds so callers can persist refreshed tokens
     updated_creds = YouTubeCredentials(
@@ -162,8 +193,16 @@ def upload_video(creds: YouTubeCredentials, file_path: Path,
                  title: str, description: str,
                  tags: list, category_id: str,
                  privacy: str,
-                 progress_callback: Optional[Callable] = None) -> UploadResult:
+                 progress_callback: Optional[Callable] = None,
+                 cancel_event: Optional[threading.Event] = None) -> UploadResult:
     """Upload a video to YouTube using resumable upload.
+
+    The chunk loop checks cancel_event AFTER each next_chunk() (success
+    or transient error) so a stalled or slow upload can be aborted
+    promptly — without it, a user-hit cancel only takes effect at the
+    next clip boundary. Combined with the per-request timeout installed
+    in get_authenticated_service, this caps the worst-case time to
+    actually stop at ~YOUTUBE_HTTP_TIMEOUT_SECONDS.
 
     Args:
         creds: YouTube OAuth2 credentials.
@@ -174,11 +213,15 @@ def upload_video(creds: YouTubeCredentials, file_path: Path,
         category_id: YouTube category ID.
         privacy: Privacy status (private, unlisted, public).
         progress_callback: Optional callback(bytes_sent, bytes_total).
+        cancel_event: Optional event; if set between chunks, the upload
+            aborts and returns cancelled=True.
 
     Returns:
-        UploadResult with success status and video ID/URL.
+        UploadResult. On user cancel, success=False and cancelled=True.
     """
     try:
+        from googleapiclient.http import MediaFileUpload
+
         service, creds = get_authenticated_service(creds)
 
         body = {
@@ -208,7 +251,20 @@ def upload_video(creds: YouTubeCredentials, file_path: Path,
 
         response = None
         while response is None:
-            status, response = request.next_chunk()
+            # num_retries lets next_chunk handle transient 5xx / network
+            # blips internally with exponential backoff before raising,
+            # so we don't immediately bail on a flaky connection. Each
+            # chunk eventually gives up, which then lets the cancel
+            # check below run.
+            status, response = request.next_chunk(num_retries=YOUTUBE_CHUNK_RETRIES)
+
+            # Cancel check runs after EVERY next_chunk() (whether it
+            # returned progress or completion), so a user cancel during
+            # a large upload takes effect within one chunk's worth of
+            # time rather than waiting for the whole file.
+            if cancel_event is not None and cancel_event.is_set():
+                return UploadResult(success=False, cancelled=True)
+
             if status and progress_callback:
                 progress_callback(
                     status.resumable_progress,
@@ -225,6 +281,11 @@ def upload_video(creds: YouTubeCredentials, file_path: Path,
         )
 
     except Exception as exc:
+        # If the user cancelled mid-flight, classify a transport-level
+        # exception (e.g., socket closed when we set the event) as a
+        # cancellation rather than a hard error.
+        if cancel_event is not None and cancel_event.is_set():
+            return UploadResult(success=False, cancelled=True)
         return UploadResult(
             success=False,
             error=str(exc),

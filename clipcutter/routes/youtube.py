@@ -262,6 +262,7 @@ if (window.opener) {
                     category_id=clip_req.category_id,
                     privacy=clip_req.privacy,
                     progress_callback=progress_cb,
+                    cancel_event=state.upl.cancel_event,
                 )
 
                 if result.success:
@@ -283,6 +284,13 @@ if (window.opener) {
                             add_to_playlist(current_creds, clip_req.playlist_id, result.video_id)
                         except Exception:
                             pass  # Non-fatal: upload succeeded
+                elif result.cancelled:
+                    # Don't write to errors[] or stamp the metadata with
+                    # a "failed" status: the user asked to stop, the
+                    # remaining work is just unstarted. Snapshot's
+                    # cancelled flag (from the event) is the signal the
+                    # FE uses to render the cancelled pill.
+                    break
                 else:
                     state.upl.add_error(clip_req.filename, result.error or "Unknown error")
                     meta_path = _safe_join(meta_base, f"{clip_req.video_stem}_clips.json")
@@ -307,7 +315,11 @@ if (window.opener) {
 
     @router.post("/api/youtube/upload/cancel")
     def cancel_youtube_upload():
-        state.upl.cancelled = True
+        # YouTube uploads are pure HTTP — no subprocess to terminate.
+        # Setting the event is enough: upload_video's per-chunk check
+        # picks it up within one chunk (or one HTTP timeout if the
+        # socket is currently wedged) and returns cancelled=True.
+        state.upl.cancel_event.set()
         return {"status": "cancelling"}
 
     return router
