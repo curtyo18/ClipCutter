@@ -123,8 +123,7 @@ def test_detect_highlights_smoke_silence(silence_video):
     from pathlib import Path
 
     with tempfile.TemporaryDirectory() as tmp:
-        audio_path = Path(tmp) / "audio.wav"
-        extract_audio(silence_video, audio_path)
+        audio_path = extract_audio(silence_video, Path(tmp))
         features = compute_features(audio_path)
         highlights = detect_highlights(features, sensitivity=1.0)
         # Silence shouldn't surface volume/shouting/sudden_noise highlights.
@@ -140,8 +139,7 @@ def test_detect_highlights_smoke_noise(noise_video):
     from pathlib import Path
 
     with tempfile.TemporaryDirectory() as tmp:
-        audio_path = Path(tmp) / "audio.wav"
-        extract_audio(noise_video, audio_path)
+        audio_path = extract_audio(noise_video, Path(tmp))
         features = compute_features(audio_path)
         highlights = detect_highlights(features, sensitivity=1.0)
         assert isinstance(highlights, list)
