@@ -403,31 +403,37 @@ class TestProcessProgressMovement:
         shutil.copy2(str(mixed_video), str(proc_dir / "mixed_10s.mp4"))
 
         page.goto(url)
+
+        # On fast hosts the chip element can mount, jump 0 -> 100, and unmount
+        # between Playwright's ~100ms polling intervals, so `wait_for_function`
+        # can miss the only non-zero reading. A MutationObserver fires
+        # synchronously on the DOM change and reliably captures it.
+        page.evaluate(
+            """() => {
+                window.__maxChipPct = 0;
+                const sample = () => {
+                    const el = document.querySelector('.cc-task-chip-pct');
+                    if (!el) return;
+                    const m = /(\\d+)\\s*%/.exec(el.textContent || '');
+                    if (!m) return;
+                    const v = parseInt(m[1], 10);
+                    if (v > window.__maxChipPct) window.__maxChipPct = v;
+                };
+                new MutationObserver(sample).observe(document.body, {
+                    childList: true, subtree: true, characterData: true,
+                });
+            }"""
+        )
+
         page.fill("#folderPath", str(proc_dir))
         page.click("#btnProcess")
 
-        # Assert real progress motion: the chip must move past 0% (proving the
-        # progress signal is wired up) AND cross 50% (proving the bar advances
-        # rather than just jumping 0 -> 100). We avoid asserting a specific
-        # number of distinct values because fast hosts can finish the whole
-        # pipeline in <1.6s and only ever publish 0% and 100%.
+        # The recorded max crossing 50 proves the bar advanced past zero. We
+        # don't assert intermediate distinct values because fast hosts publish
+        # only 0% and 100%.
         page.wait_for_function(
-            """() => {
-                const el = document.querySelector('.cc-task-chip-pct');
-                if (!el) return false;
-                const m = /(\\d+)\\s*%/.exec(el.textContent || '');
-                return !!m && parseInt(m[1], 10) > 0;
-            }""",
-            timeout=10000,
-        )
-        page.wait_for_function(
-            """() => {
-                const el = document.querySelector('.cc-task-chip-pct');
-                if (!el) return false;
-                const m = /(\\d+)\\s*%/.exec(el.textContent || '');
-                return !!m && parseInt(m[1], 10) > 50;
-            }""",
-            timeout=30000,
+            "() => (window.__maxChipPct || 0) > 50",
+            timeout=60000,
         )
 
 
