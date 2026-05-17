@@ -20,7 +20,7 @@ from clipcutter.clipper import (
     format_duration,
     trim_silence,
 )
-from clipcutter.config import AUDIO_SAMPLE_RATE, DIR_CLIPS, DIR_METADATA, DIR_PENDING, VIDEO_EXTENSIONS
+from clipcutter.config import AUDIO_SAMPLE_RATE, DIR_CLIPS, DIR_PENDING, VIDEO_EXTENSIONS
 from clipcutter.detector import detect_highlights
 from clipcutter.features import compute_features
 from clipcutter.metadata import save_metadata
@@ -45,7 +45,6 @@ def process_video(video_path: Path, output_dir: Path,
 
     # Check for existing clips
     existing_clip_dir = output_dir / DIR_CLIPS / DIR_PENDING / video_path.stem
-    existing_meta = output_dir / DIR_METADATA / f"{video_path.stem}_clips.json"
     if existing_clip_dir.exists() and any(existing_clip_dir.iterdir()):
         if overwrite:
             pass  # proceed to cleanup below
@@ -55,10 +54,11 @@ def process_video(video_path: Path, output_dir: Path,
         ):
             click.echo("  Skipped.")
             return []
-        # Clean up old clips
+        # Clean up old pending clip files. We intentionally do NOT delete
+        # the metadata file here — save_metadata() merges with any existing
+        # metadata so that kept/encoded/uploaded clips retain their state
+        # across a re-process.
         shutil.rmtree(existing_clip_dir)
-        if existing_meta.exists():
-            existing_meta.unlink()
 
     # Get video duration
     video_duration = get_video_duration(video_path)
