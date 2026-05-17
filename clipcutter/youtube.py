@@ -1,16 +1,30 @@
 """YouTube Data API v3 integration for uploading clips."""
 
 import json
+import secrets
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Tuple, Union
 from urllib.parse import urlencode
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-
 from clipcutter import config
+
+# Per-chunk HTTP timeout (seconds). A stalled TCP socket inside
+# next_chunk() would otherwise wedge the upload worker forever, so we
+# install this on the httplib2 transport used by the YouTube client.
+YOUTUBE_HTTP_TIMEOUT_SECONDS = 120
+
+# Retry budget for each chunk's HTTPS PUT. googleapiclient retries with
+# exponential backoff on transient network errors when num_retries > 0,
+# but eventually gives up so cancellation can take effect.
+YOUTUBE_CHUNK_RETRIES = 3
+
+# Timeout for one-shot OAuth token endpoint calls. A wedged Google
+# token endpoint must not pin a FastAPI request thread (the OAuth
+# callback is synchronous), so cap each request well below the default
+# Uvicorn/HTTP read timeout.
+OAUTH_HTTP_TIMEOUT_SECONDS = 30
 
 
 @dataclass
@@ -25,15 +39,34 @@ class YouTubeCredentials:
 
 @dataclass
 class UploadResult:
-    """Result of a YouTube upload attempt."""
+    """Result of a YouTube upload attempt.
+
+    cancelled distinguishes a user-initiated abort (event set mid-upload)
+    from a genuine error, so the route can render a "Cancelled" pill
+    instead of a red error banner.
+
+    permanent distinguishes a hard 4xx failure (bad request, forbidden,
+    quota, duplicate) from a transient 5xx / network blip; the FE can
+    use this to decide whether a "Retry" affordance is worth offering.
+    """
     success: bool
     video_id: Optional[str] = None
     error: Optional[str] = None
     url: Optional[str] = None
+    cancelled: bool = False
+    permanent: bool = False
 
 
-def get_auth_url(client_id: str, redirect_uri: str) -> str:
-    """Construct a Google OAuth2 authorization URL."""
+def get_auth_url(client_id: str, redirect_uri: str) -> Tuple[str, str]:
+    """Construct a Google OAuth2 authorization URL.
+
+    Returns a tuple of (auth_url, state). The state is a cryptographically
+    random token that the caller MUST stash and verify on the callback —
+    without it, any process/tab on localhost could hit /oauth/callback
+    with a fabricated code and trick the app into binding the wrong
+    Google account to this ClipCutter install.
+    """
+    state = secrets.token_urlsafe(32)
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
@@ -41,8 +74,9 @@ def get_auth_url(client_id: str, redirect_uri: str) -> str:
         "scope": " ".join(config.YOUTUBE_SCOPES),
         "access_type": "offline",
         "prompt": "consent",
+        "state": state,
     }
-    return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+    return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}", state
 
 
 def exchange_code(code: str, client_id: str, client_secret: str,
@@ -59,6 +93,7 @@ def exchange_code(code: str, client_id: str, client_secret: str,
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         },
+        timeout=OAUTH_HTTP_TIMEOUT_SECONDS,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -84,6 +119,7 @@ def refresh_access_token(creds: YouTubeCredentials) -> YouTubeCredentials:
             "refresh_token": creds.refresh_token,
             "grant_type": "refresh_token",
         },
+        timeout=OAUTH_HTTP_TIMEOUT_SECONDS,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -111,14 +147,25 @@ def save_credentials(creds: YouTubeCredentials, path: Path) -> None:
 
 
 def load_credentials(path: Path) -> Optional[YouTubeCredentials]:
-    """Load credentials from a JSON file, or None if missing/corrupt."""
+    """Load credentials from a JSON file, or None if missing/corrupt.
+
+    A creds file with an empty refresh_token is treated as missing — it
+    can't be used to refresh an expired access token, so every
+    authenticated-only route would 401 sooner or later. Surfacing None
+    here forces the caller (status check, upload, playlists) to push
+    the user back through the OAuth flow rather than letting a stub
+    file masquerade as a live session.
+    """
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        refresh_token = data.get("refresh_token") or ""
+        if not refresh_token:
+            return None
         return YouTubeCredentials(
             access_token=data["access_token"],
-            refresh_token=data["refresh_token"],
+            refresh_token=refresh_token,
             token_expiry=data.get("token_expiry"),
             client_id=data["client_id"],
             client_secret=data["client_secret"],
@@ -127,16 +174,31 @@ def load_credentials(path: Path) -> Optional[YouTubeCredentials]:
         return None
 
 
-def get_authenticated_service(creds: YouTubeCredentials):
+def get_authenticated_service(creds: YouTubeCredentials,
+                              timeout: int = YOUTUBE_HTTP_TIMEOUT_SECONDS):
     """Return a YouTube API service with auto-refreshing credentials.
 
     The google.oauth2.credentials.Credentials object handles token refresh
     automatically when refresh_token and token_uri are provided.
 
+    A per-request HTTP timeout is installed on the httplib2 transport so
+    a wedged TCP socket inside an upload chunk can't pin the worker
+    indefinitely — every next_chunk() will surface a socket.timeout that
+    next_chunk's own retry logic (num_retries) can recover from, and the
+    upload loop's cancel check still gets a chance to fire between chunks.
+
     Returns:
         Tuple of (service, YouTubeCredentials) where credentials may have
         an updated access_token after refresh.
     """
+    # Lazy imports keep clipcutter.youtube importable in test/dev
+    # environments without the google/googleapiclient deps installed
+    # (so tests can patch clipcutter.youtube.build at the module level).
+    import httplib2
+    from google.oauth2.credentials import Credentials
+    from google_auth_httplib2 import AuthorizedHttp
+    from googleapiclient.discovery import build
+
     google_creds = Credentials(
         token=creds.access_token,
         refresh_token=creds.refresh_token,
@@ -145,7 +207,10 @@ def get_authenticated_service(creds: YouTubeCredentials):
         client_secret=creds.client_secret,
         scopes=config.YOUTUBE_SCOPES,
     )
-    service = build("youtube", "v3", credentials=google_creds)
+    # Build an authorized httplib2 with the timeout baked in. We can't
+    # pass both credentials= and http= to build(), so wrap manually.
+    authed_http = AuthorizedHttp(google_creds, http=httplib2.Http(timeout=timeout))
+    service = build("youtube", "v3", http=authed_http)
 
     # Return updated creds so callers can persist refreshed tokens
     updated_creds = YouTubeCredentials(
@@ -162,8 +227,17 @@ def upload_video(creds: YouTubeCredentials, file_path: Path,
                  title: str, description: str,
                  tags: list, category_id: str,
                  privacy: str,
-                 progress_callback: Optional[Callable] = None) -> UploadResult:
+                 progress_callback: Optional[Callable] = None,
+                 cancel_event: Optional[threading.Event] = None,
+                 creds_path: Optional[Path] = None) -> UploadResult:
     """Upload a video to YouTube using resumable upload.
+
+    The chunk loop checks cancel_event AFTER each next_chunk() (success
+    or transient error) so a stalled or slow upload can be aborted
+    promptly — without it, a user-hit cancel only takes effect at the
+    next clip boundary. Combined with the per-request timeout installed
+    in get_authenticated_service, this caps the worst-case time to
+    actually stop at ~YOUTUBE_HTTP_TIMEOUT_SECONDS.
 
     Args:
         creds: YouTube OAuth2 credentials.
@@ -174,11 +248,23 @@ def upload_video(creds: YouTubeCredentials, file_path: Path,
         category_id: YouTube category ID.
         privacy: Privacy status (private, unlisted, public).
         progress_callback: Optional callback(bytes_sent, bytes_total).
+        cancel_event: Optional event; if set between chunks, the upload
+            aborts and returns cancelled=True.
+        creds_path: Optional path to the on-disk credentials JSON. If
+            provided, an in-flight access-token refresh (triggered
+            automatically by the google library when the current token
+            is rejected mid-upload) is persisted to disk before this
+            function returns. Long batches would otherwise die with
+            "invalid_grant" once the access token expires.
 
     Returns:
-        UploadResult with success status and video ID/URL.
+        UploadResult. On user cancel, success=False and cancelled=True.
     """
+    original_access_token = creds.access_token
+    service = None
     try:
+        from googleapiclient.http import MediaFileUpload
+
         service, creds = get_authenticated_service(creds)
 
         body = {
@@ -208,7 +294,20 @@ def upload_video(creds: YouTubeCredentials, file_path: Path,
 
         response = None
         while response is None:
-            status, response = request.next_chunk()
+            # num_retries lets next_chunk handle transient 5xx / network
+            # blips internally with exponential backoff before raising,
+            # so we don't immediately bail on a flaky connection. Each
+            # chunk eventually gives up, which then lets the cancel
+            # check below run.
+            status, response = request.next_chunk(num_retries=YOUTUBE_CHUNK_RETRIES)
+
+            # Cancel check runs after EVERY next_chunk() (whether it
+            # returned progress or completion), so a user cancel during
+            # a large upload takes effect within one chunk's worth of
+            # time rather than waiting for the whole file.
+            if cancel_event is not None and cancel_event.is_set():
+                return UploadResult(success=False, cancelled=True)
+
             if status and progress_callback:
                 progress_callback(
                     status.resumable_progress,
@@ -225,10 +324,63 @@ def upload_video(creds: YouTubeCredentials, file_path: Path,
         )
 
     except Exception as exc:
+        # If the user cancelled mid-flight, classify a transport-level
+        # exception (e.g., socket closed when we set the event) as a
+        # cancellation rather than a hard error.
+        if cancel_event is not None and cancel_event.is_set():
+            return UploadResult(success=False, cancelled=True)
+
+        # Classify HttpError by HTTP status: 4xx is permanent (bad
+        # request, forbidden, quota, duplicate — re-uploading the same
+        # bytes won't help) while 5xx is transient (Google had a hiccup,
+        # a retry might succeed). The frontend can gate its "Retry"
+        # affordance on `!permanent`.
+        permanent = False
+        try:
+            from googleapiclient.errors import HttpError
+        except Exception:  # pragma: no cover - import errors only on broken envs
+            HttpError = None  # type: ignore[assignment]
+
+        if HttpError is not None and isinstance(exc, HttpError):
+            status = getattr(getattr(exc, "resp", None), "status", None)
+            if isinstance(status, int) and 400 <= status < 500:
+                permanent = True
+
         return UploadResult(
             success=False,
             error=str(exc),
+            permanent=permanent,
         )
+
+    finally:
+        # If google's library lazily refreshed the access token during
+        # next_chunk() (it does so automatically on 401), the new token
+        # lives on service._http.credentials.token. Persist it so the
+        # next clip in the batch — and any future ClipCutter session —
+        # sees the fresh token instead of dying with invalid_grant.
+        if creds_path is not None and service is not None:
+            try:
+                google_creds = getattr(getattr(service, "_http", None),
+                                       "credentials", None)
+                new_token = getattr(google_creds, "token", None) if google_creds else None
+                if new_token and new_token != original_access_token:
+                    save_credentials(
+                        YouTubeCredentials(
+                            access_token=new_token,
+                            refresh_token=(
+                                getattr(google_creds, "refresh_token", None)
+                                or creds.refresh_token
+                            ),
+                            token_expiry=creds.token_expiry,
+                            client_id=creds.client_id,
+                            client_secret=creds.client_secret,
+                        ),
+                        creds_path,
+                    )
+            except Exception:
+                # Best-effort persistence; never let a save failure
+                # mask the actual upload result.
+                pass
 
 
 def list_playlists(creds: YouTubeCredentials) -> list:

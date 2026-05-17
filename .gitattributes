@@ -1,0 +1,11 @@
+# Normalize all text files to LF in the repository.
+# Working tree may use native line endings on checkout (eol=lf forces LF here
+# because we develop across WSL2 + Windows mounts and want a single canonical form).
+* text=auto eol=lf
+
+# Windows batch launcher must stay CRLF — cmd.exe is unhappy with LF-only .bat.
+*.bat text eol=crlf
+
+# Explicitly mark known binaries so Git never tries to diff or normalize them.
+*.png binary
+*.ico binary

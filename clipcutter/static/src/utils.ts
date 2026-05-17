@@ -22,11 +22,17 @@ export function parseTrimTime(str: string): number {
   return parseFloat(str) || 0;
 }
 
-/** Escape HTML special characters */
+/** Escape HTML special characters — safe for both text and attribute contexts.
+ *  The textContent/innerHTML round-trip only escapes & < > and silently leaves
+ *  " and ' alone, which breaks out of attribute boundaries. Explicit replace
+ *  chain covers the full 5-char set. */
 export function escapeHtml(text: string): string {
-  const d = document.createElement('div');
-  d.textContent = text;
-  return d.innerHTML;
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /** Convert display name to safe filename stem */
@@ -68,9 +74,21 @@ export function attachVolumePreference(video: HTMLVideoElement): void {
   });
 }
 
+// Module-level reference to the current modal's close function so external
+// callers (e.g. switchTab in main.ts) can tear it down properly — `.remove()`
+// on the modal element alone would leak the document-level keydown listener.
+let currentModalClose: (() => void) | null = null;
+
+/** Close any open preview modal and detach its document-level listeners. */
+export function closePreviewModal(): void {
+  if (currentModalClose) currentModalClose();
+}
+
 /** Show a fullscreen modal that plays the given video URL. Esc / backdrop click close. */
 export function openPreviewModal(url: string, _title?: string): void {
-  document.getElementById('clipPreviewModal')?.remove();
+  // Tear down any existing modal cleanly so the previous keydown listener
+  // isn't left attached to the document.
+  closePreviewModal();
 
   const modal = document.createElement('div');
   modal.id = 'clipPreviewModal';
@@ -90,7 +108,9 @@ export function openPreviewModal(url: string, _title?: string): void {
     video.pause();
     modal.remove();
     document.removeEventListener('keydown', onKey);
+    if (currentModalClose === close) currentModalClose = null;
   };
+  currentModalClose = close;
 
   const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);

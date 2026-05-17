@@ -208,9 +208,24 @@ def keep_and_wait(client, video_stem: str, filename: str,
     Phase 4 made the keep endpoint async — it returns {task_id, status="started"}
     immediately and the ffmpeg work happens in a daemon thread. Tests that need
     to check the resulting file/metadata state must wait for the task to land.
+
+    ``client`` may be either a FastAPI/Starlette TestClient (in-process,
+    relative paths) or a string base URL like ``"http://127.0.0.1:8123"``
+    pointing at a live uvicorn server (browser tests). The latter goes
+    through the same HTTP path the real frontend uses, so the AppState
+    that's exercised is the one the browser is also hitting.
     """
+    if isinstance(client, str):
+        import requests
+        base = client.rstrip("/")
+        post = lambda path, **kw: requests.post(f"{base}{path}", **kw)
+        get = lambda path, **kw: requests.get(f"{base}{path}", **kw)
+    else:
+        post = client.post
+        get = client.get
+
     body = json_body if json_body is not None else {}
-    resp = client.post(f"/api/clips/{video_stem}/{filename}/keep", json=body)
+    resp = post(f"/api/clips/{video_stem}/{filename}/keep", json=body)
     if resp.status_code != 200:
         return {
             "status": "http_error",
@@ -220,7 +235,7 @@ def keep_and_wait(client, video_stem: str, filename: str,
     task_id = resp.json().get("task_id")
     deadline = time.time() + timeout
     while time.time() < deadline:
-        snap = client.get("/api/clips/keep/status").json()
+        snap = get("/api/clips/keep/status").json()
         my = next((t for t in snap.get("tasks", []) if t["task_id"] == task_id), None)
         if my is None:
             # Task GC'd — backend treats it as finished.

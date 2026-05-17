@@ -44,7 +44,7 @@ Audio-based video highlight extractor. Point it at a folder of gaming recordings
 ```bash
 git clone https://github.com/curtyo18/ClipCutter.git
 cd ClipCutter
-pip install -e .
+pip install -e ".[youtube,dev]"
 ```
 
 ## Usage
@@ -93,7 +93,7 @@ Python, FastAPI, librosa, numpy/scipy, FFmpeg, TypeScript
 ## Running tests
 
 ```bash
-pip install pytest httpx playwright
+pip install -e ".[dev]"
 python -m playwright install chromium
 
 pytest tests/ -v                   # Full suite

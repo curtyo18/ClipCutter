@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from clipcutter.config import DIR_CLIPS, DIR_METADATA, DIR_PENDING
 from clipcutter.metadata import load_metadata, load_metadata_dict
+from clipcutter.routes._helpers import _safe_join
 from clipcutter.state import AppState
 
 
@@ -117,13 +118,7 @@ def create_router(state: AppState, launch_cwd: str) -> APIRouter:
     @router.post("/api/folder-scan/file/delete")
     def delete_folder_file(req: FolderFileDeleteRequest):
         folder_path = Path(req.folder).resolve()
-        file_path = (folder_path / req.filename).resolve()
-
-        # Path traversal guard
-        try:
-            file_path.relative_to(folder_path)
-        except ValueError:
-            raise HTTPException(400, "Invalid filename")
+        file_path = _safe_join(folder_path, req.filename)
 
         if not file_path.exists():
             raise HTTPException(404, "File not found")
@@ -172,7 +167,9 @@ def create_router(state: AppState, launch_cwd: str) -> APIRouter:
 
     @router.post("/api/sources/{video_stem}/delete")
     def delete_source(video_stem: str):
-        meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+        meta_base = state.output_dir / DIR_METADATA
+        clips_base = state.output_dir / DIR_CLIPS
+        meta_path = _safe_join(meta_base, f"{video_stem}_clips.json")
         if not meta_path.exists():
             raise HTTPException(404, "Metadata not found")
         data = load_metadata_dict(meta_path)
@@ -186,7 +183,7 @@ def create_router(state: AppState, launch_cwd: str) -> APIRouter:
         source_path.unlink()
         leftover = 0
         for subdir in (DIR_PENDING, "discarded"):
-            clip_dir = state.output_dir / DIR_CLIPS / subdir / video_stem
+            clip_dir = _safe_join(clips_base, subdir, video_stem)
             if not clip_dir.exists():
                 continue
             for f in list(clip_dir.iterdir()):

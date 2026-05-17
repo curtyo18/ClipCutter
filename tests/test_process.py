@@ -304,3 +304,172 @@ class TestFolderFileDelete:
         })
         assert resp.status_code == 200
         assert not video.exists()
+
+
+class TestListSources:
+    """GET /api/sources returns the per-video summary used by the Review
+    tab's source-video dropdown. Empty when no metadata exists; one entry
+    per `<stem>_clips.json` otherwise."""
+
+    def test_empty_returns_empty_list(self, output_dir, app_client):
+        resp = app_client.get("/api/sources")
+        assert resp.status_code == 200
+        assert resp.json() == {"sources": []}
+
+    def test_lists_each_processed_video(self, output_dir, app_client, tmp_path):
+        from tests.conftest import save_test_metadata
+        from clipcutter.models import ClipMetadata
+
+        # Two source videos with reviewed clips.
+        for stem, status_a, status_b in [
+            ("sourcelist_a", "kept", "discarded"),
+            ("sourcelist_b", "kept", "kept"),
+        ]:
+            video = tmp_path / f"{stem}.mp4"
+            video.write_bytes(b"\x00" * 1024)
+            clips = [
+                ClipMetadata(
+                    filename="clip_001.mp4", source_video=str(video),
+                    start_time=0.0, end_time=5.0, duration=5.0,
+                    detection_reasons=["volume_spike"], confidence=0.8,
+                    status=status_a,
+                ),
+                ClipMetadata(
+                    filename="clip_002.mp4", source_video=str(video),
+                    start_time=10.0, end_time=15.0, duration=5.0,
+                    detection_reasons=["volume_spike"], confidence=0.7,
+                    status=status_b,
+                ),
+            ]
+            save_test_metadata(output_dir, stem, clips, str(video))
+
+        resp = app_client.get("/api/sources")
+        assert resp.status_code == 200
+        data = resp.json()
+        stems = sorted(s["video_stem"] for s in data["sources"])
+        assert stems == ["sourcelist_a", "sourcelist_b"]
+
+        # Each entry includes the audit counters the FE renders.
+        for src in data["sources"]:
+            assert src["total"] == 2
+            assert src["kept"] + src["discarded"] == 2
+            assert src["exists"] is True  # source video file present
+            assert src["fully_reviewed"] is True  # no pending statuses
+
+    def test_pending_clips_mark_source_not_fully_reviewed(
+        self, output_dir, app_client, tmp_path,
+    ):
+        from tests.conftest import save_test_metadata
+        from clipcutter.models import ClipMetadata
+
+        stem = "sourcelist_partial"
+        video = tmp_path / f"{stem}.mp4"
+        video.write_bytes(b"\x00" * 512)
+        clips = [
+            ClipMetadata(
+                filename="clip_001.mp4", source_video=str(video),
+                start_time=0.0, end_time=5.0, duration=5.0,
+                detection_reasons=["volume_spike"], confidence=0.8,
+                status="pending",
+            ),
+        ]
+        save_test_metadata(output_dir, stem, clips, str(video))
+
+        resp = app_client.get("/api/sources")
+        src = next(s for s in resp.json()["sources"] if s["video_stem"] == stem)
+        assert src["fully_reviewed"] is False
+
+
+class TestDeleteSource:
+    """POST /api/sources/{video_stem}/delete removes the source video on
+    disk and sweeps pending/discarded clip directories. Returns 404 when
+    metadata or video is missing; refuses when any clip is still pending.
+
+    Note: the route uses POST, not DELETE — matches the existing
+    folder-scan delete shape (POST + JSON body for the latter; POST +
+    path param here)."""
+
+    def _seed_video_and_meta(
+        self, output_dir, tmp_path, stem, clip_statuses,
+    ):
+        """Create a fake source video + metadata with the given clip
+        statuses. Returns the source path."""
+        from tests.conftest import save_test_metadata
+        from clipcutter.models import ClipMetadata
+
+        video = tmp_path / f"{stem}.mp4"
+        video.write_bytes(b"\x00" * 2048)
+        clips = [
+            ClipMetadata(
+                filename=f"clip_{i:03d}.mp4", source_video=str(video),
+                start_time=0.0, end_time=5.0, duration=5.0,
+                detection_reasons=["volume_spike"], confidence=0.8,
+                status=status,
+            )
+            for i, status in enumerate(clip_statuses, 1)
+        ]
+        save_test_metadata(output_dir, stem, clips, str(video))
+        return video
+
+    def test_delete_source_removes_video_and_clip_dirs(
+        self, output_dir, app_client, tmp_path,
+    ):
+        stem = "srcdel_clean"
+        video = self._seed_video_and_meta(
+            output_dir, tmp_path, stem, ["kept", "discarded"],
+        )
+
+        # Drop a stray file in the pending dir so the route's cleanup
+        # branch (unlink + rmdir) is exercised.
+        pending_dir = output_dir / "clips" / "pending" / stem
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        (pending_dir / "leftover.mp4").write_bytes(b"x")
+
+        resp = app_client.post(f"/api/sources/{stem}/delete")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "deleted"
+        assert body["freed_mb"] >= 0
+        # Source video is gone.
+        assert not video.exists()
+        # Pending dir was swept (file removed, dir removed if empty).
+        assert not pending_dir.exists()
+
+    def test_delete_source_nonexistent_returns_404(self, output_dir, app_client):
+        # Metadata file does not exist.
+        resp = app_client.post("/api/sources/nonexistent_stem/delete")
+        assert resp.status_code == 404
+
+    def test_delete_source_missing_video_returns_404(
+        self, output_dir, app_client, tmp_path,
+    ):
+        """Metadata exists but the source video file has already been
+        deleted (e.g., by the folder-scan delete or out-of-band). The
+        route should report 404 rather than 200 with a misleading
+        "deleted, freed=0" response."""
+        stem = "srcdel_gone"
+        video = self._seed_video_and_meta(
+            output_dir, tmp_path, stem, ["kept"],
+        )
+        # Simulate the source already being removed.
+        video.unlink()
+        assert not video.exists()
+
+        resp = app_client.post(f"/api/sources/{stem}/delete")
+        assert resp.status_code == 404
+
+    def test_delete_source_blocks_when_pending_remain(
+        self, output_dir, app_client, tmp_path,
+    ):
+        """Refuses to delete the source while any clip is still in
+        "pending" — losing the source would orphan the review."""
+        stem = "srcdel_pending"
+        video = self._seed_video_and_meta(
+            output_dir, tmp_path, stem, ["pending", "kept"],
+        )
+
+        resp = app_client.post(f"/api/sources/{stem}/delete")
+        assert resp.status_code == 400
+        # Source must still exist — guard against the route deleting first
+        # then 400ing after the file is already gone.
+        assert video.exists()

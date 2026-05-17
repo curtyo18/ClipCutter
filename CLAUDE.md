@@ -5,11 +5,14 @@ Audio-only video highlight extractor. Analyzes gaming videos (~10 min) for volum
 ## Quick Start
 
 ```bash
+pip install -e ".[youtube,dev]"  # Install with YouTube + test deps
 python -m clipcutter ui          # Web UI (Process + Review + Export tabs)
 python -m clipcutter process .   # CLI processing
 python -m clipcutter review      # CLI review
 ClipCutter.bat                   # Double-click launcher (Windows)
 ```
+
+Core install (`pip install -e .`) skips YouTube upload and the test suite. Opt in with the `youtube` and/or `dev` extras as needed.
 
 ## Stack
 
@@ -74,6 +77,6 @@ pytest tests/ -v                    # Full suite
 pytest tests/ -v -k "not browser"   # API-only (no Playwright needed)
 ```
 
-**Deps:** `pytest`, `httpx`, `playwright`, `pytest-playwright`. Setup: `python -m playwright install chromium`.
+**Deps:** install the `dev` extra (`pip install -e ".[dev]"`) — pulls in `pytest`, `httpx`, `playwright`, `pytest-playwright`. Then `python -m playwright install chromium`.
 
 **Gotcha:** Silent video produces a fallback clip by design — tests assert fallback, not zero clips.

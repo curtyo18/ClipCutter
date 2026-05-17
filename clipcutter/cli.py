@@ -1,10 +1,30 @@
 """Click CLI: process and review commands."""
 
+import socket
 from pathlib import Path
 
 import click
 
 from clipcutter import __version__
+
+
+def _find_free_port(start: int = 8000, end: int = 8099) -> int:
+    """Return a TCP port on 127.0.0.1 that nothing is currently bound to.
+
+    Walks `start..end` in order so the URL stays predictable across launches
+    on a normally-quiet machine, then falls back to letting the OS pick any
+    ephemeral port if everything in the range is taken.
+    """
+    for p in range(start, end + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", p))
+                return p
+            except OSError:
+                continue
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 @click.group()
@@ -83,8 +103,9 @@ def review(output_dir, player, source):
 @click.option("-o", "--output", "output_dir", type=click.Path(),
               default="./output", show_default=True,
               help="Output directory for clips and metadata.")
-@click.option("-p", "--port", type=int, default=8000, show_default=True,
-              help="Port to run the web UI on.")
+@click.option("-p", "--port", type=int, default=None,
+              help="Port to run the web UI on. Omit to auto-find a free port "
+                   "in 8000-8099 (then any ephemeral port if all are taken).")
 def ui(output_dir, port):
     """Open the browser-based review UI."""
     import asyncio
@@ -92,6 +113,9 @@ def ui(output_dir, port):
     import webbrowser
     import uvicorn
     from clipcutter.web import create_app
+
+    if port is None:
+        port = _find_free_port()
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -1,19 +1,26 @@
 """Encoding endpoints."""
+import logging
 import os
+import shutil
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+logger = logging.getLogger(__name__)
+
 from clipcutter.config import DIR_CLIPS, DIR_COMPILATIONS, DIR_ENCODED, DIR_KEPT, DIR_METADATA
+from clipcutter.encoder import FFMPEG_ENCODE_TIMEOUT
+from clipcutter.errors import FFmpegTimeoutError
 from clipcutter.metadata import (
     load_metadata, load_metadata_dict, update_clip_encoding,
     update_clip_status, clear_clip_encoding,
 )
-from clipcutter.routes._helpers import _media_type, _sanitize_filename
+from clipcutter.routes._helpers import _safe_join, _sanitize_filename
 from clipcutter.state import AppState
 
 
@@ -90,7 +97,7 @@ def create_router(state: AppState) -> APIRouter:
                     "duration": clip.duration,
                     "detection_reasons": clip.detection_reasons,
                     "confidence": clip.confidence,
-                    "video_url": f"/video/{video_stem}/{clip.filename}",
+                    "video_url": f"/video/kept/{video_stem}/{clip.filename}",
                     "clipped_at": clipped_at,
                     "custom_name": clip.custom_name,
                     "encoded_filename": clip.encoded_filename,
@@ -135,26 +142,29 @@ def create_router(state: AppState) -> APIRouter:
             raise HTTPException(400, f"Unknown preset: {req.preset}")
 
         preset = presets[req.preset]
+        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
+        encoded_base = state.output_dir / DIR_CLIPS / DIR_ENCODED
+        meta_base = state.output_dir / DIR_METADATA
 
-        # Validate all files exist before starting
+        # Validate all files exist before starting (also rejects traversal)
         for clip_ref in req.clips:
-            kept_path = state.output_dir / DIR_CLIPS / DIR_KEPT / clip_ref.video_stem / clip_ref.filename
+            kept_path = _safe_join(kept_base, clip_ref.video_stem, clip_ref.filename)
             if not kept_path.exists():
                 raise HTTPException(404, f"Clip not found: {clip_ref.video_stem}/{clip_ref.filename}")
 
         state.enc.reset(total=len(req.clips))
 
         def run():
-            from clipcutter.encoder import encode_clip
+            from clipcutter.encoder import build_encode_command
 
             for i, clip_ref in enumerate(req.clips):
-                if state.enc.cancelled:
+                if state.enc.cancel_event.is_set():
                     break
 
                 state.enc.set_current(clip_ref.filename, i + 1)
-                input_path = state.output_dir / DIR_CLIPS / DIR_KEPT / clip_ref.video_stem / clip_ref.filename
-                encoded_dir = state.output_dir / DIR_CLIPS / DIR_ENCODED / clip_ref.video_stem
-                meta_path = state.output_dir / DIR_METADATA / f"{clip_ref.video_stem}_clips.json"
+                input_path = _safe_join(kept_base, clip_ref.video_stem, clip_ref.filename)
+                encoded_dir = _safe_join(encoded_base, clip_ref.video_stem)
+                meta_path = _safe_join(meta_base, f"{clip_ref.video_stem}_clips.json")
 
                 # Use custom_name from metadata if available for output filename
                 custom_stem = None
@@ -173,9 +183,80 @@ def create_router(state: AppState) -> APIRouter:
                 output_path = encoded_dir / out_name
 
                 try:
-                    encode_clip(input_path, output_path, preset, req.target_fps, req.slowdown_factor)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    cmd = build_encode_command(
+                        input_path, output_path, preset,
+                        req.target_fps, req.slowdown_factor,
+                    )
+
+                    if cmd is None:
+                        # Copy preset, no fps/slowdown — straight file copy.
+                        # No Popen to register; cancel between iterations is
+                        # sufficient for the no-op case.
+                        shutil.copy2(str(input_path), str(output_path))
+                    else:
+                        proc = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                        )
+                        state.enc.set_popen(proc)
+                        try:
+                            # Flat ceiling matches encoder.FFMPEG_ENCODE_TIMEOUT.
+                            # A hung encode can't pin the worker forever, even
+                            # if the user never hits cancel. On timeout the
+                            # error is caught per-clip below so the batch can
+                            # advance to the next file.
+                            try:
+                                _stdout, stderr = proc.communicate(
+                                    timeout=FFMPEG_ENCODE_TIMEOUT,
+                                )
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
+                                try:
+                                    _stdout, stderr = proc.communicate(timeout=5)
+                                except Exception:
+                                    stderr = ""
+                                if output_path.exists():
+                                    try:
+                                        output_path.unlink()
+                                    except OSError:
+                                        pass
+                                raise FFmpegTimeoutError(
+                                    f"FFmpeg encoding timed out after "
+                                    f"{FFMPEG_ENCODE_TIMEOUT}s for {clip_ref.filename}"
+                                )
+                        finally:
+                            state.enc.set_popen(None)
+
+                        if proc.returncode != 0:
+                            # Cancellation surfaces as a non-zero return code
+                            # (SIGTERM/SIGKILL). Treat it as cancellation
+                            # rather than per-clip error if the event is set.
+                            if state.enc.cancel_event.is_set():
+                                if output_path.exists():
+                                    try:
+                                        output_path.unlink()
+                                    except OSError:
+                                        pass
+                                break
+                            if output_path.exists():
+                                try:
+                                    output_path.unlink()
+                                except OSError:
+                                    pass
+                            stderr_tail = (stderr or "")[-500:]
+                            raise RuntimeError(
+                                f"FFmpeg encoding failed for {clip_ref.filename}: {stderr_tail}"
+                            )
+
                     if meta_path.exists():
-                        update_clip_encoding(meta_path, clip_ref.filename, out_name, req.preset)
+                        if not update_clip_encoding(meta_path, clip_ref.filename, out_name, req.preset):
+                            logger.warning(
+                                "update_clip_encoding: no match for %s in %s",
+                                clip_ref.filename, meta_path,
+                            )
                     state.enc.add_completed(clip_ref.filename)
                 except Exception as exc:
                     state.enc.add_error(clip_ref.filename, str(exc))
@@ -191,42 +272,105 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.post("/api/encode/cancel")
     def cancel_encoding():
-        state.enc.cancelled = True
+        state.enc.cancel_event.set()
+        # Terminate the in-flight ffmpeg subprocess if one is registered.
+        # TOCTOU: the worker may clear popen between get_popen() and
+        # terminate(), so wrap each call in try/except.
+        proc = state.enc.get_popen()
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            except Exception:
+                pass
         return {"status": "cancelling"}
-
-    @router.get("/video/encoded/{video_stem}/{filename}")
-    def serve_encoded_video(video_stem: str, filename: str):
-        clip_path = state.output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / filename
-        if not clip_path.exists():
-            raise HTTPException(404, "Encoded clip not found")
-        return FileResponse(clip_path, media_type=_media_type(filename))
 
     @router.delete("/api/kept/{video_stem}/{filename}")
     def delete_kept_clip(video_stem: str, filename: str):
-        """Delete a kept clip file and mark it as discarded in metadata."""
-        kept_path = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem / filename
-        meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+        """Delete a kept clip file and mark it as discarded in metadata.
+
+        Returns leftover_files (paths relative to output_dir) for anything
+        in the parent folder that couldn't be removed — e.g. a .waveform.json
+        sidecar or a stray encoded file. Same shape as delete_source so the
+        UI can warn the user instead of silently lying about success.
+        """
+        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
+        meta_base = state.output_dir / DIR_METADATA
+        kept_path = _safe_join(kept_base, video_stem, filename)
+        meta_path = _safe_join(meta_base, f"{video_stem}_clips.json")
 
         if not kept_path.exists():
             raise HTTPException(404, "Clip not found")
 
         kept_path.unlink()
 
-        # Remove the parent folder if it's now empty
-        if kept_path.parent.is_dir() and not any(kept_path.parent.iterdir()):
-            kept_path.parent.rmdir()
+        # Try to remove the parent folder if it's now empty. If it isn't,
+        # surface the leftover paths so the caller knows the cleanup was
+        # partial (e.g. a waveform sidecar persisted, or an encoded file
+        # lingered in a sibling directory of the same stem).
+        leftover_files: list[str] = []
+        parent = kept_path.parent
+        if parent.is_dir():
+            remaining = sorted(parent.iterdir())
+            if remaining:
+                for f in remaining:
+                    try:
+                        leftover_files.append(
+                            str(f.relative_to(state.output_dir))
+                        )
+                    except ValueError:
+                        leftover_files.append(f.name)
+            else:
+                try:
+                    parent.rmdir()
+                except OSError:
+                    pass
 
         if meta_path.exists():
-            update_clip_status(meta_path, filename, "discarded")
+            if not update_clip_status(meta_path, filename, "discarded"):
+                raise HTTPException(404, "Clip not found in metadata")
 
-        return {"status": "deleted"}
+        return {"status": "deleted", "leftover_files": leftover_files}
 
     @router.get("/api/open-folder/kept/{video_stem}")
     def open_folder(video_stem: str):
-        folder = state.output_dir / DIR_CLIPS / DIR_KEPT / video_stem
+        kept_base = state.output_dir / DIR_CLIPS / DIR_KEPT
+        folder = _safe_join(kept_base, video_stem)
         if not folder.exists():
             raise HTTPException(404, "Folder not found")
-        os.startfile(str(folder))
+
+        if sys.platform == "win32":
+            os.startfile(str(folder))
+        elif sys.platform == "darwin":
+            try:
+                subprocess.Popen(
+                    ["open", str(folder)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                raise HTTPException(501, "Folder-open not available on this platform")
+            except OSError as exc:
+                raise HTTPException(501, f"Folder-open failed: {exc}")
+        else:
+            try:
+                subprocess.Popen(
+                    ["xdg-open", str(folder)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                raise HTTPException(501, "xdg-open not installed")
+            except OSError as exc:
+                raise HTTPException(501, f"Folder-open failed: {exc}")
         return {"status": "opened"}
 
     @router.get("/api/storage-summary")
@@ -255,7 +399,9 @@ def create_router(state: AppState) -> APIRouter:
     @router.delete("/api/encoded/{video_stem}/{filename}")
     def delete_encoded_clip(video_stem: str, filename: str):
         """Delete the encoded version of a kept clip and clear its encoding metadata."""
-        meta_path = state.output_dir / DIR_METADATA / f"{video_stem}_clips.json"
+        meta_base = state.output_dir / DIR_METADATA
+        encoded_base = state.output_dir / DIR_CLIPS / DIR_ENCODED
+        meta_path = _safe_join(meta_base, f"{video_stem}_clips.json")
         if not meta_path.exists():
             raise HTTPException(404, "Clip metadata not found")
 
@@ -269,7 +415,7 @@ def create_router(state: AppState) -> APIRouter:
         if not encoded_filename:
             raise HTTPException(404, "No encoded version found")
 
-        enc_path = state.output_dir / DIR_CLIPS / DIR_ENCODED / video_stem / encoded_filename
+        enc_path = _safe_join(encoded_base, video_stem, encoded_filename)
         freed_mb = 0.0
         if enc_path.exists():
             freed_mb = round(enc_path.stat().st_size / (1024 * 1024), 1)
@@ -277,7 +423,11 @@ def create_router(state: AppState) -> APIRouter:
             if enc_path.parent.is_dir() and not any(enc_path.parent.iterdir()):
                 enc_path.parent.rmdir()
 
-        clear_clip_encoding(meta_path, filename)
+        if not clear_clip_encoding(meta_path, filename):
+            logger.warning(
+                "clear_clip_encoding: no match for %s in %s",
+                filename, meta_path,
+            )
         return {"status": "deleted", "freed_mb": freed_mb}
 
     return router

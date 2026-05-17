@@ -3,6 +3,7 @@
 import json
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 
 from tests.conftest import create_pending_clip, create_pending_clip_long, save_test_metadata, keep_and_wait
 
@@ -385,3 +386,79 @@ class TestReviewSortOrder:
             "Newer-processed video clips should appear first"
         )
         assert test_clips[1]["video_stem"] == older_stem
+
+
+class TestKeepSegmentValidation:
+    """Keep route validates segment length up-front (before spawning a
+    worker) so the FE gets an immediate 400 for nonsense input instead
+    of "task started" followed by a delayed task failure.
+
+    The route's check is `seg.end - seg.start < 1.0` → 400. Segments
+    shorter than 1s are physically too small to extract meaningfully.
+    Note: this is the route's own floor, NOT config.CLIP_MIN_LENGTH_SECONDS
+    (which is 30s and only governs the detector's clip-construction
+    pipeline, not the manual trim path)."""
+
+    def _setup_pending(self, output_dir: Path, stem: str, filename: str) -> Path:
+        """Write a pending clip + metadata directly (no ffmpeg). The keep
+        route only needs the file to exist for the path check; we mock
+        the ffprobe call below so the missing-ffmpeg container doesn't
+        blow up _probe_duration before validation runs."""
+        pending_dir = output_dir / "clips" / "pending" / stem
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        clip_path = pending_dir / filename
+        clip_path.write_bytes(b"stub-mp4-bytes")
+
+        meta_dir = output_dir / "metadata"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / f"{stem}_clips.json").write_text(json.dumps({
+            "source_video": f"/fake/{stem}.mp4",
+            "processed_at": "2026-01-01T00:00:00",
+            "clip_count": 1,
+            "clips": [{
+                "filename": filename,
+                "source_video": f"/fake/{stem}.mp4",
+                "start_time": 0.0, "end_time": 30.0, "duration": 30.0,
+                "detection_reasons": ["volume_spike"], "confidence": 0.8,
+                "status": "pending",
+            }],
+        }), encoding="utf-8")
+        return clip_path
+
+    def test_segment_shorter_than_one_second_returns_400(
+        self, output_dir, app_client,
+    ):
+        stem = "shortseg"
+        self._setup_pending(output_dir, stem, "clip_001.mp4")
+
+        # Patch _probe_duration so it doesn't actually shell out to ffprobe
+        # (which isn't on PATH in CI). Returning a finite duration lets the
+        # route reach the segment-validation branch.
+        with patch(
+            "clipcutter.routes.review._probe_duration", return_value=30.0,
+        ):
+            resp = app_client.post(
+                f"/api/clips/{stem}/clip_001.mp4/keep",
+                json={"segments": [{"start": 5.0, "end": 5.5}]},
+            )
+        assert resp.status_code == 400
+        # The error message should mention the segment was too short.
+        assert "too short" in resp.json()["detail"].lower()
+
+    def test_segment_exactly_at_floor_is_rejected(
+        self, output_dir, app_client,
+    ):
+        """The check is `< 1.0`, so exactly 0.999 is rejected. Guard against
+        someone flipping the comparison to `<= 1.0` and breaking 1s segments."""
+        stem = "floorseg"
+        self._setup_pending(output_dir, stem, "clip_001.mp4")
+
+        with patch(
+            "clipcutter.routes.review._probe_duration", return_value=30.0,
+        ):
+            # 0.999s — just below the floor.
+            resp = app_client.post(
+                f"/api/clips/{stem}/clip_001.mp4/keep",
+                json={"segments": [{"start": 0.0, "end": 0.999}]},
+            )
+        assert resp.status_code == 400

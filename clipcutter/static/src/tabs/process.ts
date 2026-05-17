@@ -106,7 +106,7 @@ function renderVideosInFolder(result: FolderScanResult): void {
 
   const rows = result.videos.map(v => {
     const pill = pillFor(v.status);
-    const safeAttr = htmlAttr(v.filename);
+    const safeAttr = escapeHtml(v.filename);
     return `<tr>
       <td class="cc-mono" style="width:46%">${escapeHtml(v.filename)}</td>
       <td class="cc-num cc-fg2" style="width:80px">${formatSize(v.size_mb)}</td>
@@ -150,7 +150,7 @@ function renderStaleCandidates(result: FolderScanResult, thresholdDays: number):
   section.style.borderTop = '1px solid var(--cc-line)';
 
   const rows = stale.map(v => {
-    const safeAttr = htmlAttr(v.filename);
+    const safeAttr = escapeHtml(v.filename);
     const reviewedNote = v.status === 'unprocessed' ? 'never reviewed' : 'reviewed';
     return `<tr>
       <td class="cc-mono" style="width:46%">${escapeHtml(v.filename)}</td>
@@ -300,10 +300,6 @@ function pillFor(status: VideoEntry['status']): { status: string; text: string }
 function formatSize(mb: number): string {
   if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
   return mb.toFixed(0) + ' MB';
-}
-
-function htmlAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function setPanelMessage(msg: string): void {

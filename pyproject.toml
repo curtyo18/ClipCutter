@@ -17,5 +17,18 @@ dependencies = [
     "uvicorn>=0.20",
 ]
 
+[project.optional-dependencies]
+youtube = [
+    "google-api-python-client>=2.0",
+    "google-auth>=2.0",
+    "google-auth-oauthlib>=1.0",
+]
+dev = [
+    "pytest>=7",
+    "httpx>=0.24",
+    "playwright>=1.40",
+    "pytest-playwright>=0.4",
+]
+
 [project.scripts]
 clipcutter = "clipcutter.cli:cli"

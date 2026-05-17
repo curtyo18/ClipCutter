@@ -56,8 +56,17 @@ function setSubtab(s: Subtab): void {
   renderActiveSubtab();
 }
 
+// loadExportTab is invoked from tab-switch, every relevant task-complete event,
+// and several handlers (e.g. deleteEncodedClipHandler). Parallel calls would
+// otherwise let a stale fetch overwrite module-level state with old values
+// mid-selection. Each call captures a fresh token; assignments are skipped
+// whenever a newer call has superseded the current one.
+let inflightLoadToken: object | null = null;
+
 export async function loadExportTab(): Promise<void> {
   initExportTab();
+  const token = {};
+  inflightLoadToken = token;
   try {
     const [keptData, presetsData, ytStatus, summaryData, sourcesResp] = await Promise.all([
       fetchKeptClips(),
@@ -66,6 +75,7 @@ export async function loadExportTab(): Promise<void> {
       fetchStorageSummary().catch(() => null),
       fetchSources().catch(() => ({ sources: [] })),
     ]);
+    if (inflightLoadToken !== token) return; // stale — a newer load is in flight
     keptClips = keptData.clips || [];
     encodingPresets = presetsData.presets || [];
     defaultPreset = presetsData.default || 'h264_hq';
@@ -78,11 +88,16 @@ export async function loadExportTab(): Promise<void> {
     if (ytAuthenticated) {
       try {
         const plData = await fetchYouTubePlaylists();
+        if (inflightLoadToken !== token) return; // stale
         ytPlaylists = plData.playlists || [];
-      } catch { ytPlaylists = []; }
+      } catch {
+        if (inflightLoadToken !== token) return; // stale
+        ytPlaylists = [];
+      }
     }
   } catch (e) {
     console.error('Failed to load export tab:', e);
+    if (inflightLoadToken !== token) return; // stale — let the newer load render
   }
   renderExportView();
 }
@@ -621,15 +636,42 @@ export async function startYouTubeAuthHandler(): Promise<void> {
   if (!clientId || !clientSecret) { alert('Enter both Client ID and Client Secret.'); return; }
   try {
     const data = await startYouTubeAuth(clientId, clientSecret);
-    window.open(data.auth_url, 'youtube-auth', 'width=600,height=700');
+    const popup = window.open(data.auth_url, 'youtube-auth', 'width=600,height=700');
+
+    // The auth flow has three possible exit paths — success postMessage from
+    // the popup, the user closing the popup without finishing, and a 5-minute
+    // safety timeout. All three must detach the listener and clear the timers,
+    // otherwise repeated sign-in attempts leak `message` listeners and timers.
+    let pollInterval: number | null = null;
+    let timeoutId: number | null = null;
+
+    const cleanup = (): void => {
+      window.removeEventListener('message', listener);
+      if (pollInterval !== null) { clearInterval(pollInterval); pollInterval = null; }
+      if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
+    };
+
     const listener = async (event: MessageEvent): Promise<void> => {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === 'youtube-auth-success') {
-        window.removeEventListener('message', listener);
+        cleanup();
         await loadExportTab();
       }
     };
     window.addEventListener('message', listener);
+
+    // Poll for popup closure (popup.closed flips true when the user dismisses
+    // the window without completing auth). Skip polling if the popup was
+    // blocked or `window.open` returned null.
+    if (popup) {
+      pollInterval = window.setInterval(() => {
+        if (popup.closed) cleanup();
+      }, 500);
+    }
+
+    // Hard 5-minute ceiling so a popup we can't observe (e.g. cross-origin
+    // edge cases where `popup.closed` reads as false forever) still cleans up.
+    timeoutId = window.setTimeout(cleanup, 5 * 60 * 1000);
   } catch (e) { alert((e as Error).message); }
 }
 

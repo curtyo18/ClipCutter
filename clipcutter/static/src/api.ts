@@ -119,7 +119,6 @@ export interface CompilationStatus {
   completed: boolean;
   error: string | null;
   output_filename: string | null;
-  cancelled: boolean;
 }
 
 export interface CompilationInfo {
@@ -274,7 +273,6 @@ export const cancelEncoding = () => apiPost<{ status: string }>('/api/encode/can
 export const startCompilation = (body: { clips: CompilationClipRef[]; transition: string; crossfade_duration: number; preset?: string; title?: string }) =>
   apiPost<{ status: string; compilation_id: string }>('/api/compilation', body);
 export const fetchCompilationStatus = () => apiGet<CompilationStatus>('/api/compilation/status');
-export const cancelCompilation = () => apiPost<{ status: string }>('/api/compilation/cancel', {});
 export const fetchCompilations = () => apiGet<{ compilations: CompilationInfo[] }>('/api/compilations');
 export const deleteCompilation = (compId: string) => apiDelete(`/api/compilation/${compId}`);
 export const deleteCompilationSources = (compId: string) =>

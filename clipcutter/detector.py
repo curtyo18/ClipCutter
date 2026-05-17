@@ -4,6 +4,7 @@ from typing import List
 
 import librosa
 import numpy as np
+from scipy.ndimage import median_filter
 from scipy.signal import find_peaks
 
 from clipcutter.config import (
@@ -303,6 +304,35 @@ def _contiguous_regions(mask: np.ndarray) -> List[tuple]:
 # Sudden Noise Detection
 # ---------------------------------------------------------------------------
 
+def _local_onset_median(onset: np.ndarray, med_win: int) -> np.ndarray:
+    """Per-frame local median of ``onset`` over a window of ``med_win`` frames.
+
+    Equivalent to the previous implementation::
+
+        padded = np.pad(onset, (med_win // 2, med_win // 2), mode='reflect')
+        return np.array([np.median(padded[i:i + med_win])
+                         for i in range(len(onset))])
+
+    scipy's ``median_filter(..., mode='mirror')`` matches numpy's
+    ``np.pad(mode='reflect')`` boundary handling. For odd ``med_win`` the two
+    implementations agree exactly (max abs diff = 0); for even ``med_win``
+    scipy picks one of the two middle elements while ``np.median`` averages
+    them, so we fall back to the Python loop in that less-common case to
+    preserve equivalence.
+    """
+    n = len(onset)
+    if n == 0:
+        return np.zeros(0)
+    if med_win <= 1:
+        # 1-sized window: median = the value itself.
+        return onset.astype(float, copy=True)
+    if med_win % 2 == 1:
+        return median_filter(onset, size=med_win, mode="mirror")
+    # Even window: preserve exact np.median (mean of two middles) semantics.
+    padded = np.pad(onset, (med_win // 2, med_win // 2), mode="reflect")
+    return np.array([np.median(padded[i:i + med_win]) for i in range(n)])
+
+
 def _detect_sudden_noises(features: AudioFeatures,
                           sensitivity: float) -> List[Highlight]:
     onset = features.onset_strength
@@ -311,12 +341,7 @@ def _detect_sudden_noises(features: AudioFeatures,
 
     # Local median ratio (5-second window)
     med_win = max(1, int(5.0 * features.sample_rate / features.hop_length))
-    # Pad for edge handling
-    padded = np.pad(onset, (med_win // 2, med_win // 2), mode='reflect')
-    local_median = np.array([
-        np.median(padded[i:i + med_win])
-        for i in range(len(onset))
-    ])
+    local_median = _local_onset_median(onset, med_win)
     local_median = np.maximum(local_median, 1e-10)
     onset_ratio = onset / local_median
 

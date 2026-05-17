@@ -74,7 +74,9 @@ class ClipMetadata:
     youtube_video_id: Optional[str] = None
     youtube_url: Optional[str] = None
     youtube_upload_status: Optional[str] = None
-    highlight_regions: Optional[List[dict]] = None
+    # Default to [] (not None) so call sites can iterate without a None check.
+    # Older metadata files may have `null` here; from_dict() coerces.
+    highlight_regions: List[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = {
@@ -99,12 +101,15 @@ class ClipMetadata:
             d["youtube_url"] = self.youtube_url
         if self.youtube_upload_status is not None:
             d["youtube_upload_status"] = self.youtube_upload_status
-        if self.highlight_regions is not None:
+        if self.highlight_regions:
             d["highlight_regions"] = self.highlight_regions
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "ClipMetadata":
+        # Coerce None → [] for backward compat with old metadata files that
+        # stored `null` (when highlight_regions defaulted to Optional).
+        regions = d.get("highlight_regions") or []
         return cls(
             filename=d["filename"],
             source_video=d["source_video"],
@@ -120,7 +125,7 @@ class ClipMetadata:
             youtube_video_id=d.get("youtube_video_id", None),
             youtube_url=d.get("youtube_url", None),
             youtube_upload_status=d.get("youtube_upload_status", None),
-            highlight_regions=d.get("highlight_regions", None),
+            highlight_regions=regions,
         )
 
 

@@ -1,10 +1,18 @@
 """Shared application state for ClipCutter web server."""
+import subprocess
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+# Cap on retained processing log lines. The FE polls /api/process/status ~1Hz
+# and ships the whole list each tick, so an unbounded list grows the payload
+# without bound on long runs. 500 covers a typical multi-video session while
+# keeping the per-poll JSON payload small.
+PROCESS_LOG_MAXLEN = 500
 
 
 class ProcessingState:
@@ -12,7 +20,10 @@ class ProcessingState:
 
     def __init__(self):
         self.running = False
-        self.log_lines: list[str] = []
+        # Bounded ring buffer — see PROCESS_LOG_MAXLEN comment above.
+        # deque.append is O(1) and oldest-eviction is automatic; list(deque)
+        # in snapshot() yields a cheap shallow copy.
+        self.log_lines: deque[str] = deque(maxlen=PROCESS_LOG_MAXLEN)
         self.error: Optional[str] = None
         self.videos_total: int = 0
         self.videos_done: int = 0
@@ -22,7 +33,7 @@ class ProcessingState:
     def reset(self):
         with self._lock:
             self.running = True
-            self.log_lines = []
+            self.log_lines = deque(maxlen=PROCESS_LOG_MAXLEN)
             self.error = None
             self.videos_total = 0
             self.videos_done = 0
@@ -87,7 +98,14 @@ class LogWriter:
 
 
 class EncodingState:
-    """Thread-safe encoding state."""
+    """Thread-safe encoding state.
+
+    cancel_event drives between-iteration cancellation; popen lets the
+    cancel route .terminate() the in-flight ffmpeg subprocess instead of
+    waiting for it to finish. The .cancelled property keeps the legacy
+    bool-ish API working for routes/snapshot consumers (notably the FE,
+    which expects {"cancelled": bool} in the status payload).
+    """
 
     def __init__(self):
         self.running = False
@@ -96,8 +114,20 @@ class EncodingState:
         self.total: int = 0
         self.completed: list[str] = []
         self.errors: list[dict] = []
-        self.cancelled = False
+        self.cancel_event = threading.Event()
+        self.popen: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
+
+    @property
+    def cancelled(self) -> bool:
+        return self.cancel_event.is_set()
+
+    @cancelled.setter
+    def cancelled(self, value: bool) -> None:
+        if value:
+            self.cancel_event.set()
+        else:
+            self.cancel_event.clear()
 
     def reset(self, total: int):
         with self._lock:
@@ -107,7 +137,11 @@ class EncodingState:
             self.total = total
             self.completed = []
             self.errors = []
-            self.cancelled = False
+            self.popen = None
+            # cancel_event manipulation is atomic — safe to clear outside
+            # the lock, but keep it here to preserve the "reset is one
+            # consistent snapshot" invariant.
+            self.cancel_event.clear()
 
     def set_current(self, filename: str, index: int):
         with self._lock:
@@ -122,10 +156,20 @@ class EncodingState:
         with self._lock:
             self.errors.append({"filename": filename, "error": error})
 
+    def set_popen(self, popen: Optional[subprocess.Popen]) -> None:
+        """Register/clear the currently-running ffmpeg subprocess."""
+        with self._lock:
+            self.popen = popen
+
+    def get_popen(self) -> Optional[subprocess.Popen]:
+        with self._lock:
+            return self.popen
+
     def finish(self):
         with self._lock:
             self.running = False
             self.current_file = None
+            self.popen = None
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -136,12 +180,20 @@ class EncodingState:
                 "total": self.total,
                 "completed": list(self.completed),
                 "errors": list(self.errors),
-                "cancelled": self.cancelled,
+                "cancelled": self.cancel_event.is_set(),
             }
 
 
 class UploadState:
-    """Thread-safe upload state."""
+    """Thread-safe upload state.
+
+    cancel_event drives between-chunk cancellation inside upload_video,
+    so a stalled-but-eventually-progressing TCP transfer can be aborted
+    without waiting for the next clip. The .cancelled property keeps
+    the legacy bool-ish API working for routes/snapshot consumers (the
+    FE expects {"cancelled": bool} in the status payload), same pattern
+    as EncodingState.
+    """
 
     def __init__(self):
         self.running = False
@@ -152,8 +204,19 @@ class UploadState:
         self.bytes_total: int = 0
         self.completed: list[dict] = []
         self.errors: list[dict] = []
-        self.cancelled = False
+        self.cancel_event = threading.Event()
         self._lock = threading.Lock()
+
+    @property
+    def cancelled(self) -> bool:
+        return self.cancel_event.is_set()
+
+    @cancelled.setter
+    def cancelled(self, value: bool) -> None:
+        if value:
+            self.cancel_event.set()
+        else:
+            self.cancel_event.clear()
 
     def reset(self, total: int):
         with self._lock:
@@ -165,7 +228,9 @@ class UploadState:
             self.bytes_total = 0
             self.completed = []
             self.errors = []
-            self.cancelled = False
+            # cancel_event manipulation is atomic — clearing under the
+            # lock keeps "reset is one consistent snapshot" intact.
+            self.cancel_event.clear()
 
     def set_current(self, filename: str, index: int):
         with self._lock:
@@ -203,7 +268,7 @@ class UploadState:
                 "bytes_total": self.bytes_total,
                 "completed": list(self.completed),
                 "errors": list(self.errors),
-                "cancelled": self.cancelled,
+                "cancelled": self.cancel_event.is_set(),
             }
 
 
@@ -217,7 +282,6 @@ class CompilationState:
         self.completed = False
         self.error: Optional[str] = None
         self.output_filename: Optional[str] = None
-        self.cancelled = False
         self._lock = threading.Lock()
 
     def reset(self):
@@ -228,7 +292,6 @@ class CompilationState:
             self.completed = False
             self.error = None
             self.output_filename = None
-            self.cancelled = False
 
     def update(self, step: str, pct: float):
         with self._lock:
@@ -251,22 +314,30 @@ class CompilationState:
                 "completed": self.completed,
                 "error": self.error,
                 "output_filename": self.output_filename,
-                "cancelled": self.cancelled,
             }
 
 
 @dataclass
 class KeepTask:
-    """One in-flight keep (trim) operation."""
+    """One in-flight keep (trim) operation.
+
+    cancel_event + popen mirror EncodingState's pattern but per-task,
+    since keep workers can run in parallel (different clips, different
+    files). The worker checks cancel_event between subprocess spawns
+    and stores its current Popen here so the cancel route can terminate
+    the in-flight ffmpeg.
+    """
     task_id: str
     video_stem: str
     filename: str
-    status: str = "running"  # running | done | error
+    status: str = "running"  # running | done | error | cancelled
     progress_step: str = "Starting…"
     error: Optional[str] = None
     trimmed: bool = False
     started_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    popen: Optional[subprocess.Popen] = None
 
 
 class KeepState:
@@ -290,21 +361,56 @@ class KeepState:
             self.tasks[tid] = KeepTask(task_id=tid, video_stem=video_stem, filename=filename)
         return tid
 
+    def get(self, tid: str) -> Optional[KeepTask]:
+        with self._lock:
+            return self.tasks.get(tid)
+
     def update_step(self, tid: str, step: str) -> None:
         with self._lock:
             t = self.tasks.get(tid)
             if t and t.status == "running":
                 t.progress_step = step
 
-    def finish(self, tid: str, error: Optional[str] = None, trimmed: bool = False) -> None:
+    def set_popen(self, tid: str, popen: Optional[subprocess.Popen]) -> None:
+        """Register/clear the running ffmpeg subprocess for this task."""
+        with self._lock:
+            t = self.tasks.get(tid)
+            if t:
+                t.popen = popen
+
+    def get_popen(self, tid: str) -> Optional[subprocess.Popen]:
+        with self._lock:
+            t = self.tasks.get(tid)
+            return t.popen if t else None
+
+    def get_cancel_event(self, tid: str) -> Optional[threading.Event]:
+        with self._lock:
+            t = self.tasks.get(tid)
+            return t.cancel_event if t else None
+
+    def cancel(self, tid: str) -> bool:
+        """Signal cancellation for a task. Returns True if the task exists."""
+        with self._lock:
+            t = self.tasks.get(tid)
+            if not t:
+                return False
+            t.cancel_event.set()
+            return True
+
+    def finish(self, tid: str, error: Optional[str] = None, trimmed: bool = False,
+               cancelled: bool = False) -> None:
         with self._lock:
             t = self.tasks.get(tid)
             if not t:
                 return
-            t.status = "error" if error else "done"
+            if cancelled:
+                t.status = "cancelled"
+            else:
+                t.status = "error" if error else "done"
             t.error = error
             t.trimmed = trimmed
             t.finished_at = time.time()
+            t.popen = None
 
     def snapshot(self) -> dict:
         now = time.time()
@@ -340,3 +446,21 @@ class AppState:
         self.upl = UploadState()
         self.comp = CompilationState()
         self.keep = KeepState()
+        # Single-use OAuth state token: set by /api/youtube/auth/start,
+        # consumed (and cleared) by /oauth/callback. Storing in-memory
+        # rather than on-disk prevents stale stub-creds files from
+        # fooling other YT routes into thinking auth is complete.
+        self._youtube_oauth_state: Optional[str] = None
+        self._youtube_oauth_lock = threading.Lock()
+
+    def set_youtube_oauth_state(self, state: str) -> None:
+        """Stash a freshly-generated OAuth state token (overwrites any prior)."""
+        with self._youtube_oauth_lock:
+            self._youtube_oauth_state = state
+
+    def consume_youtube_oauth_state(self) -> Optional[str]:
+        """Return-and-clear the pending OAuth state token (single-use)."""
+        with self._youtube_oauth_lock:
+            value = self._youtube_oauth_state
+            self._youtube_oauth_state = None
+            return value
