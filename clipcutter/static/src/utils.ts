@@ -74,9 +74,21 @@ export function attachVolumePreference(video: HTMLVideoElement): void {
   });
 }
 
+// Module-level reference to the current modal's close function so external
+// callers (e.g. switchTab in main.ts) can tear it down properly — `.remove()`
+// on the modal element alone would leak the document-level keydown listener.
+let currentModalClose: (() => void) | null = null;
+
+/** Close any open preview modal and detach its document-level listeners. */
+export function closePreviewModal(): void {
+  if (currentModalClose) currentModalClose();
+}
+
 /** Show a fullscreen modal that plays the given video URL. Esc / backdrop click close. */
 export function openPreviewModal(url: string, _title?: string): void {
-  document.getElementById('clipPreviewModal')?.remove();
+  // Tear down any existing modal cleanly so the previous keydown listener
+  // isn't left attached to the document.
+  closePreviewModal();
 
   const modal = document.createElement('div');
   modal.id = 'clipPreviewModal';
@@ -96,7 +108,9 @@ export function openPreviewModal(url: string, _title?: string): void {
     video.pause();
     modal.remove();
     document.removeEventListener('keydown', onKey);
+    if (currentModalClose === close) currentModalClose = null;
   };
+  currentModalClose = close;
 
   const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);

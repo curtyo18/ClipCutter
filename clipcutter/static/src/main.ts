@@ -5,6 +5,7 @@ import { initProcessTab, startProcessingHandler, scanFolderHandler, deleteFileHa
 import { loadClips, clipAction, addSegment, removeSegment, focusSegment, setSegmentPoint, seekToSegment, stopWaveformSync, deleteSourceHandler, getActiveSegmentIndex } from './tabs/review';
 import { loadExportTab, toggleAllClips, startEncodingHandler, cancelEncodingHandler, startYouTubeAuthHandler, revokeYouTubeAuthHandler, startUploadHandler, cancelUploadHandler, keptClips, deleteKeptClipHandler, openFolderHandler, previewClip, deleteEncodedClipHandler, deleteSourceFromExportHandler } from './tabs/encode';
 import { addSelectedToCompilation, removeCompClip, updateCompDuration, startCompilationHandler, deleteCompilationHandler, deleteCompilationSourcesHandler, previewCompilation } from './tabs/compile';
+import { closePreviewModal } from './utils';
 
 // Expose handlers to HTML via window._cc (avoids global namespace pollution)
 declare global {
@@ -62,6 +63,11 @@ function switchTab(tab: string): void {
   document.querySelectorAll<HTMLVideoElement>('video').forEach(v => {
     if (!v.paused) v.pause();
   });
+
+  // Tear down any preview modal so it doesn't float over the new tab. Using
+  // closePreviewModal (rather than `.remove()` on the element) also detaches
+  // the document-level keydown listener the modal registered.
+  closePreviewModal();
 
   activeTab = tab;
   document.querySelectorAll<HTMLElement>('.cc-tab').forEach(t => { t.dataset.active = 'false'; });
