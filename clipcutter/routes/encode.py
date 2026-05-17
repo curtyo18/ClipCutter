@@ -1,6 +1,8 @@
 """Encoding endpoints."""
 import logging
 import os
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import List, Optional
@@ -241,7 +243,31 @@ def create_router(state: AppState) -> APIRouter:
         folder = _safe_join(kept_base, video_stem)
         if not folder.exists():
             raise HTTPException(404, "Folder not found")
-        os.startfile(str(folder))
+
+        if sys.platform == "win32":
+            os.startfile(str(folder))
+        elif sys.platform == "darwin":
+            try:
+                subprocess.Popen(
+                    ["open", str(folder)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                raise HTTPException(501, "Folder-open not available on this platform")
+            except OSError as exc:
+                raise HTTPException(501, f"Folder-open failed: {exc}")
+        else:
+            try:
+                subprocess.Popen(
+                    ["xdg-open", str(folder)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                raise HTTPException(501, "xdg-open not installed")
+            except OSError as exc:
+                raise HTTPException(501, f"Folder-open failed: {exc}")
         return {"status": "opened"}
 
     @router.get("/api/storage-summary")

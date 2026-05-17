@@ -1,6 +1,7 @@
 """Tests for Export/Encoding API (Scenarios 2, 3)."""
 
 import json
+import os
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -275,6 +276,7 @@ class TestOpenFolder:
         resp = app_client.get("/api/open-folder/kept/no_such_stem")
         assert resp.status_code == 404
 
+    @pytest.mark.skipif(not hasattr(os, "startfile"), reason="Windows-only")
     def test_open_folder_calls_startfile(self, output_dir, app_client):
         stem = "openfolder"
         clip = create_pending_clip(output_dir, stem, "clip_001.mp4",
@@ -289,7 +291,37 @@ class TestOpenFolder:
         assert resp.json()["status"] == "opened"
         mock_startfile.assert_called_once()
         called_path = mock_startfile.call_args[0][0]
-        assert stem in called_path
+        assert called_path == str(output_dir / "clips" / "kept" / stem)
+
+    def test_open_folder_calls_xdg_open_on_linux(self, output_dir, app_client, monkeypatch):
+        stem = "openfolder_linux"
+        kept_dir = output_dir / "clips" / "kept" / stem
+        kept_dir.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr("clipcutter.routes.encode.sys.platform", "linux")
+        with patch("clipcutter.routes.encode.subprocess.Popen") as mock_popen:
+            resp = app_client.get(f"/api/open-folder/kept/{stem}")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "opened"
+        mock_popen.assert_called_once()
+        args, kwargs = mock_popen.call_args
+        assert args[0] == ["xdg-open", str(kept_dir)]
+
+    def test_open_folder_calls_open_on_macos(self, output_dir, app_client, monkeypatch):
+        stem = "openfolder_mac"
+        kept_dir = output_dir / "clips" / "kept" / stem
+        kept_dir.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr("clipcutter.routes.encode.sys.platform", "darwin")
+        with patch("clipcutter.routes.encode.subprocess.Popen") as mock_popen:
+            resp = app_client.get(f"/api/open-folder/kept/{stem}")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "opened"
+        mock_popen.assert_called_once()
+        args, kwargs = mock_popen.call_args
+        assert args[0] == ["open", str(kept_dir)]
 
 
 class TestKeptClipSizes:
