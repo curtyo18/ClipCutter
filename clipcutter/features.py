@@ -80,33 +80,40 @@ def compute_rolling_zscore(signal: np.ndarray, window_frames: int) -> np.ndarray
     """Compute z-score of each frame relative to a rolling window baseline.
 
     Uses a causal (backward-looking) window so z-scores reflect
-    how unusual a frame is compared to recent history.
+    how unusual a frame is compared to recent history. Frames with fewer
+    than 2 prior samples in the window stay at 0.
+
+    Vectorized via shifted cumulative sums — bit-identical to the prior
+    Python frame-loop implementation within float tolerance.
     """
     eps = 1e-10
     n = len(signal)
-    zscore = np.zeros(n)
+    if n == 0:
+        return np.zeros(0)
 
-    # Use cumulative sums for efficient rolling stats
+    # For each frame i, compare signal[i] against the baseline signal[start:i]
+    # where start = max(0, i - window_frames). Using a prepended-0 cumsum lets
+    # us compute sum(signal[start:i]) as ext_cumsum[i] - ext_cumsum[start].
     cumsum = np.cumsum(signal)
     cumsum2 = np.cumsum(signal ** 2)
+    ext_cumsum = np.concatenate(([0.0], cumsum))     # length n+1
+    ext_cumsum2 = np.concatenate(([0.0], cumsum2))   # length n+1
 
-    # Compare signal[i] against baseline signal[start:i] (excludes i itself)
-    for i in range(1, n):
-        start = max(0, i - window_frames)
-        count = i - start  # number of elements in signal[start:i]
-        if count < 2:
-            continue
-        if start == 0:
-            s = cumsum[i - 1]
-            s2 = cumsum2[i - 1]
-        else:
-            s = cumsum[i - 1] - cumsum[start - 1]
-            s2 = cumsum2[i - 1] - cumsum2[start - 1]
-        mean = s / count
-        var = s2 / count - mean ** 2
-        std = np.sqrt(max(var, 0)) + eps
-        zscore[i] = (signal[i] - mean) / std
+    idx = np.arange(n)
+    start = np.maximum(0, idx - window_frames)
+    count = idx - start
 
+    s = ext_cumsum[idx] - ext_cumsum[start]
+    s2 = ext_cumsum2[idx] - ext_cumsum2[start]
+
+    # count < 2 frames keep zscore = 0; mask them out and use a safe divisor.
+    safe = count >= 2
+    safe_count = np.where(safe, count, 1)
+    mean = s / safe_count
+    var = np.maximum(s2 / safe_count - mean ** 2, 0.0)
+    std = np.sqrt(var) + eps
+
+    zscore = np.where(safe, (signal - mean) / std, 0.0)
     return zscore
 
 
