@@ -1,6 +1,7 @@
 """Encoding endpoints."""
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -153,10 +154,10 @@ def create_router(state: AppState) -> APIRouter:
         state.enc.reset(total=len(req.clips))
 
         def run():
-            from clipcutter.encoder import encode_clip
+            from clipcutter.encoder import build_encode_command
 
             for i, clip_ref in enumerate(req.clips):
-                if state.enc.cancelled:
+                if state.enc.cancel_event.is_set():
                     break
 
                 state.enc.set_current(clip_ref.filename, i + 1)
@@ -181,7 +182,65 @@ def create_router(state: AppState) -> APIRouter:
                 output_path = encoded_dir / out_name
 
                 try:
-                    encode_clip(input_path, output_path, preset, req.target_fps, req.slowdown_factor)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    cmd = build_encode_command(
+                        input_path, output_path, preset,
+                        req.target_fps, req.slowdown_factor,
+                    )
+
+                    if cmd is None:
+                        # Copy preset, no fps/slowdown — straight file copy.
+                        # No Popen to register; cancel between iterations is
+                        # sufficient for the no-op case.
+                        shutil.copy2(str(input_path), str(output_path))
+                    else:
+                        proc = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                        )
+                        state.enc.set_popen(proc)
+                        try:
+                            # Sentinel timeout — Task 11 will replace this
+                            # with a duration-aware value. For now: cap at
+                            # 1 hour so a hung encode can't pin the worker
+                            # forever, even if cancel isn't pressed.
+                            try:
+                                _stdout, stderr = proc.communicate(timeout=3600)
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
+                                try:
+                                    _stdout, stderr = proc.communicate(timeout=5)
+                                except Exception:
+                                    stderr = ""
+                                raise RuntimeError(
+                                    f"FFmpeg encoding timed out for {clip_ref.filename}"
+                                )
+                        finally:
+                            state.enc.set_popen(None)
+
+                        if proc.returncode != 0:
+                            # Cancellation surfaces as a non-zero return code
+                            # (SIGTERM/SIGKILL). Treat it as cancellation
+                            # rather than per-clip error if the event is set.
+                            if state.enc.cancel_event.is_set():
+                                if output_path.exists():
+                                    try:
+                                        output_path.unlink()
+                                    except OSError:
+                                        pass
+                                break
+                            if output_path.exists():
+                                try:
+                                    output_path.unlink()
+                                except OSError:
+                                    pass
+                            stderr_tail = (stderr or "")[-500:]
+                            raise RuntimeError(
+                                f"FFmpeg encoding failed for {clip_ref.filename}: {stderr_tail}"
+                            )
+
                     if meta_path.exists():
                         if not update_clip_encoding(meta_path, clip_ref.filename, out_name, req.preset):
                             logger.warning(
@@ -203,7 +262,25 @@ def create_router(state: AppState) -> APIRouter:
 
     @router.post("/api/encode/cancel")
     def cancel_encoding():
-        state.enc.cancelled = True
+        state.enc.cancel_event.set()
+        # Terminate the in-flight ffmpeg subprocess if one is registered.
+        # TOCTOU: the worker may clear popen between get_popen() and
+        # terminate(), so wrap each call in try/except.
+        proc = state.enc.get_popen()
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            except Exception:
+                pass
         return {"status": "cancelling"}
 
     @router.get("/video/encoded/{video_stem}/{filename}")

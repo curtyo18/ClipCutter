@@ -1,4 +1,5 @@
 """Shared application state for ClipCutter web server."""
+import subprocess
 import threading
 import time
 import uuid
@@ -87,7 +88,14 @@ class LogWriter:
 
 
 class EncodingState:
-    """Thread-safe encoding state."""
+    """Thread-safe encoding state.
+
+    cancel_event drives between-iteration cancellation; popen lets the
+    cancel route .terminate() the in-flight ffmpeg subprocess instead of
+    waiting for it to finish. The .cancelled property keeps the legacy
+    bool-ish API working for routes/snapshot consumers (notably the FE,
+    which expects {"cancelled": bool} in the status payload).
+    """
 
     def __init__(self):
         self.running = False
@@ -96,8 +104,20 @@ class EncodingState:
         self.total: int = 0
         self.completed: list[str] = []
         self.errors: list[dict] = []
-        self.cancelled = False
+        self.cancel_event = threading.Event()
+        self.popen: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
+
+    @property
+    def cancelled(self) -> bool:
+        return self.cancel_event.is_set()
+
+    @cancelled.setter
+    def cancelled(self, value: bool) -> None:
+        if value:
+            self.cancel_event.set()
+        else:
+            self.cancel_event.clear()
 
     def reset(self, total: int):
         with self._lock:
@@ -107,7 +127,11 @@ class EncodingState:
             self.total = total
             self.completed = []
             self.errors = []
-            self.cancelled = False
+            self.popen = None
+            # cancel_event manipulation is atomic — safe to clear outside
+            # the lock, but keep it here to preserve the "reset is one
+            # consistent snapshot" invariant.
+            self.cancel_event.clear()
 
     def set_current(self, filename: str, index: int):
         with self._lock:
@@ -122,10 +146,20 @@ class EncodingState:
         with self._lock:
             self.errors.append({"filename": filename, "error": error})
 
+    def set_popen(self, popen: Optional[subprocess.Popen]) -> None:
+        """Register/clear the currently-running ffmpeg subprocess."""
+        with self._lock:
+            self.popen = popen
+
+    def get_popen(self) -> Optional[subprocess.Popen]:
+        with self._lock:
+            return self.popen
+
     def finish(self):
         with self._lock:
             self.running = False
             self.current_file = None
+            self.popen = None
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -136,7 +170,7 @@ class EncodingState:
                 "total": self.total,
                 "completed": list(self.completed),
                 "errors": list(self.errors),
-                "cancelled": self.cancelled,
+                "cancelled": self.cancel_event.is_set(),
             }
 
 
@@ -257,16 +291,25 @@ class CompilationState:
 
 @dataclass
 class KeepTask:
-    """One in-flight keep (trim) operation."""
+    """One in-flight keep (trim) operation.
+
+    cancel_event + popen mirror EncodingState's pattern but per-task,
+    since keep workers can run in parallel (different clips, different
+    files). The worker checks cancel_event between subprocess spawns
+    and stores its current Popen here so the cancel route can terminate
+    the in-flight ffmpeg.
+    """
     task_id: str
     video_stem: str
     filename: str
-    status: str = "running"  # running | done | error
+    status: str = "running"  # running | done | error | cancelled
     progress_step: str = "Starting…"
     error: Optional[str] = None
     trimmed: bool = False
     started_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    popen: Optional[subprocess.Popen] = None
 
 
 class KeepState:
@@ -290,21 +333,56 @@ class KeepState:
             self.tasks[tid] = KeepTask(task_id=tid, video_stem=video_stem, filename=filename)
         return tid
 
+    def get(self, tid: str) -> Optional[KeepTask]:
+        with self._lock:
+            return self.tasks.get(tid)
+
     def update_step(self, tid: str, step: str) -> None:
         with self._lock:
             t = self.tasks.get(tid)
             if t and t.status == "running":
                 t.progress_step = step
 
-    def finish(self, tid: str, error: Optional[str] = None, trimmed: bool = False) -> None:
+    def set_popen(self, tid: str, popen: Optional[subprocess.Popen]) -> None:
+        """Register/clear the running ffmpeg subprocess for this task."""
+        with self._lock:
+            t = self.tasks.get(tid)
+            if t:
+                t.popen = popen
+
+    def get_popen(self, tid: str) -> Optional[subprocess.Popen]:
+        with self._lock:
+            t = self.tasks.get(tid)
+            return t.popen if t else None
+
+    def get_cancel_event(self, tid: str) -> Optional[threading.Event]:
+        with self._lock:
+            t = self.tasks.get(tid)
+            return t.cancel_event if t else None
+
+    def cancel(self, tid: str) -> bool:
+        """Signal cancellation for a task. Returns True if the task exists."""
+        with self._lock:
+            t = self.tasks.get(tid)
+            if not t:
+                return False
+            t.cancel_event.set()
+            return True
+
+    def finish(self, tid: str, error: Optional[str] = None, trimmed: bool = False,
+               cancelled: bool = False) -> None:
         with self._lock:
             t = self.tasks.get(tid)
             if not t:
                 return
-            t.status = "error" if error else "done"
+            if cancelled:
+                t.status = "cancelled"
+            else:
+                t.status = "error" if error else "done"
             t.error = error
             t.trimmed = trimmed
             t.finished_at = time.time()
+            t.popen = None
 
     def snapshot(self) -> dict:
         now = time.time()
