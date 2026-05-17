@@ -144,13 +144,13 @@ function showClip(): void {
           <button class="cc-btn" data-variant="ghost" data-size="sm" data-action="add-segment">+ Add segment</button>
           <span id="trimIndicator" class="cc-mono cc-dim" style="margin-left:8px;font-size:var(--cc-fs-xs)"></span>
           <span style="flex:1"></span>
-          <span class="cc-label">Quality</span>
+          <label class="cc-label" for="trimQuality">Quality</label>
           <select class="cc-select" id="trimQuality" style="width:140px">
             <option value="copy">Fast (copy)</option>
             <option value="precise" selected>Precise (CRF 16)</option>
             <option value="ultra">Ultra (lossless)</option>
           </select>
-          <span class="cc-label">Name</span>
+          <label class="cc-label" for="clipCustomName">Name</label>
           <input class="cc-input" id="clipCustomName" placeholder="optional" style="width:180px">
         </div>
 

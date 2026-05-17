@@ -396,6 +396,18 @@ body {
 }
 [data-dir="B"] .cc-label { text-transform: uppercase; letter-spacing: 0.1em; }
 
+/* Visually hidden but readable by screen readers — used for inputs that have
+   no visible text label (e.g. an icon-prefixed search/path field). */
+.cc-visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ----- Slider ----- */
 .cc-slider {
   appearance: none; -webkit-appearance: none;

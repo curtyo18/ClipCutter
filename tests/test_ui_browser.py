@@ -477,6 +477,61 @@ class TestProcessTabRefreshOnActivation:
         )
 
 
+class TestFormInputLabelAssociation:
+    """Verify accessibility fix #16: inputs that used to pair with a
+    ``<span class="cc-label">`` now have a programmatic accessible name
+    via ``<label for="...">`` (or wrapping ``<label>``)."""
+
+    # IDs of inputs that previously paired with an unassociated cc-label span.
+    # Process tab (always rendered in index.html) — exercised in the live DOM.
+    PROCESS_INPUTS = [
+        ("sensitivity", "Sensitivity"),
+        ("context", "Context"),
+        ("staleThreshold", "Stale after"),
+    ]
+
+    def test_process_tab_inputs_have_label_for_association(self, browser_page):
+        page, url, _ = browser_page
+        page.goto(url)
+        for input_id, expected_text in self.PROCESS_INPUTS:
+            # A <label for="..."> with the right text must exist in the DOM.
+            label = page.locator(f'label[for="{input_id}"]')
+            expect(label).to_have_count(1)
+            expect(label).to_have_text(expected_text)
+            # The input must report a non-empty accessible name. Playwright's
+            # accessibility tree resolves label[for] → input.
+            input_el = page.locator(f"#{input_id}")
+            expect(input_el).to_have_count(1)
+            acc_name = page.evaluate(
+                """id => {
+                    const lbl = document.querySelector(`label[for="${id}"]`);
+                    return lbl ? lbl.textContent.trim() : null;
+                }""",
+                input_id,
+            )
+            assert acc_name == expected_text, (
+                f"#{input_id} has no associated label[for]; got {acc_name!r}"
+            )
+
+    def test_folder_path_input_has_accessible_name(self, browser_page):
+        """The folder-path input had no visible cc-label; it now uses a
+        visually-hidden <label for="folderPath"> so screen readers can name it.
+        """
+        page, url, _ = browser_page
+        page.goto(url)
+        label = page.locator('label[for="folderPath"]')
+        expect(label).to_have_count(1)
+        # The label exists in the DOM (even if visually hidden) so a screen
+        # reader can resolve the input's accessible name.
+        name = page.evaluate(
+            """() => {
+                const lbl = document.querySelector('label[for="folderPath"]');
+                return lbl ? lbl.textContent.trim() : null;
+            }"""
+        )
+        assert name, "folderPath has no associated label text"
+
+
 class TestFullBrowserWorkflow:
     """Scenario 1 end-to-end via browser: process -> review -> keep -> export."""
 
