@@ -303,15 +303,15 @@ function renderEncodePanel(): string {
       <div class="cc-panel-head"><span>Encode</span></div>
       <div class="cc-panel-body" style="padding:var(--cc-pad-2);display:flex;flex-direction:column;gap:var(--cc-gap-2)">
         <div class="cc-col" style="gap:6px">
-          <span class="cc-label">Preset</span>
+          <label class="cc-label" for="encodePreset">Preset</label>
           <select class="cc-select" id="encodePreset">${presetButtons}</select>
         </div>
         <div class="cc-col" style="gap:6px">
-          <span class="cc-label">Target FPS</span>
+          <label class="cc-label" for="encodeFps">Target FPS</label>
           <select class="cc-select" id="encodeFps">${fpsOptions}</select>
         </div>
         <div class="cc-col" id="slowdownGroup" style="gap:6px;display:none">
-          <span class="cc-label">Slowdown (GIF only)</span>
+          <label class="cc-label" for="encodeSlowdown">Slowdown (GIF only)</label>
           <select class="cc-select" id="encodeSlowdown">
             <option value="">None (1.0×)</option>
             <option value="0.5">0.5×</option>
@@ -405,18 +405,18 @@ function renderCompilationSubtab(body: HTMLElement): void {
         <div class="cc-panel-head"><span>Build</span></div>
         <div class="cc-panel-body" style="padding:var(--cc-pad-2);display:flex;flex-direction:column;gap:var(--cc-gap-2)">
           <div class="cc-col" style="gap:6px">
-            <span class="cc-label">Title</span>
+            <label class="cc-label" for="compTitle">Title</label>
             <input class="cc-input" id="compTitle" placeholder="Optional title…">
           </div>
           <div class="cc-col" style="gap:6px">
-            <span class="cc-label">Transition</span>
+            <label class="cc-label" for="compTransition">Transition</label>
             <select class="cc-select" id="compTransition" onchange="window._cc.updateCompDuration()">
               <option value="cut">Hard cut</option>
               <option value="crossfade">Crossfade</option>
             </select>
           </div>
           <div class="cc-col" id="compXfadeGroup" style="gap:6px;display:none">
-            <span class="cc-label">Crossfade duration</span>
+            <label class="cc-label" for="compXfadeDur">Crossfade duration</label>
             <input type="number" class="cc-input" id="compXfadeDur" value="0.5" min="0.1" max="3" step="0.1"
                    oninput="window._cc.updateCompDuration()">
           </div>
@@ -445,9 +445,9 @@ function renderYouTubeSubtab(body: HTMLElement): void {
           <a href="https://console.cloud.google.com" target="_blank" style="color:var(--cc-accent)">console.cloud.google.com</a>.
         </p>
         <div class="cc-upload-grid">
-          <span class="cc-label">Client ID</span>
+          <label class="cc-label" for="ytClientId">Client ID</label>
           <input class="cc-input" type="text" id="ytClientId" placeholder="OAuth Client ID">
-          <span class="cc-label">Client Secret</span>
+          <label class="cc-label" for="ytClientSecret">Client Secret</label>
           <input class="cc-input" type="password" id="ytClientSecret" placeholder="OAuth Client Secret">
         </div>
         <div style="display:flex;justify-content:flex-end">
@@ -501,13 +501,13 @@ function renderYouTubeSubtab(body: HTMLElement): void {
                 onclick="window._cc.revokeYouTubeAuthHandler()">Sign out</button>
       </div>
       <div class="cc-upload-grid">
-        <span class="cc-label">Privacy</span>
+        <label class="cc-label" for="ytPrivacy">Privacy</label>
         <select class="cc-select" id="ytPrivacy">
           <option value="private" selected>Private</option>
           <option value="unlisted">Unlisted</option>
           <option value="public">Public</option>
         </select>
-        <span class="cc-label">Category</span>
+        <label class="cc-label" for="ytCategory">Category</label>
         <select class="cc-select" id="ytCategory">
           <option value="20" selected>Gaming</option>
           <option value="24">Entertainment</option>
@@ -517,11 +517,11 @@ function renderYouTubeSubtab(body: HTMLElement): void {
           <option value="1">Film &amp; Animation</option>
           <option value="23">Comedy</option>
         </select>
-        <span class="cc-label">Playlist</span>
+        <label class="cc-label" for="ytPlaylist">Playlist</label>
         <select class="cc-select" id="ytPlaylist">${playlistOptions}</select>
-        <span class="cc-label">Tags</span>
+        <label class="cc-label" for="ytTags">Tags</label>
         <input class="cc-input" type="text" id="ytTags" placeholder="tag1, tag2, tag3">
-        <span class="cc-label">Description</span>
+        <label class="cc-label" for="ytDescription">Description</label>
         <textarea id="ytDescription" placeholder="Description template — supports {source_video} {start_time} {end_time} {duration} {detection_reasons}"></textarea>
       </div>
       <div class="cc-panel">
