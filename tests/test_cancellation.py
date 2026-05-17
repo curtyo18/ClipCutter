@@ -272,6 +272,89 @@ class TestRealSubprocessTermination:
 
 
 # ---------------------------------------------------------------------------
+# Compile cancel route was REMOVED in Task 10 — make sure it stays gone.
+# ---------------------------------------------------------------------------
+
+class TestCompileCancelRouteRemoved:
+    """Task 10 removed POST /api/compilation/cancel because the compile
+    worker has no cancellation seams — the work is a single ffmpeg
+    invocation kicked off in a daemon thread and there's nowhere for the
+    cancel signal to land between syscalls. The route used to claim
+    "cancelling" but never actually stopped anything; deleting it is the
+    honest fix. This test guards against a well-meaning re-add."""
+
+    def test_compilation_cancel_route_gone(self, app_client):
+        # 404 if no route matches at all; 405 if the only registered
+        # route at this path is DELETE (the per-id delete route uses
+        # /api/compilation/{compilation_id}, which matches "cancel" as
+        # an id and refuses POST). Either is fine — what we're proving
+        # is that NO cancel handler exists.
+        resp = app_client.post("/api/compilation/cancel")
+        assert resp.status_code in (404, 405)
+
+
+# ---------------------------------------------------------------------------
+# 409 "already in progress" branches
+# ---------------------------------------------------------------------------
+#
+# Each of POST /api/process, /api/encode, /api/compilation must refuse a
+# second start while the first is still in flight. We flip state.X.running
+# manually instead of starting a real worker thread — the route only checks
+# the boolean, so the test is deterministic and doesn't depend on ffmpeg.
+
+class TestProcessAlreadyRunning409:
+    def test_process_409_when_already_running(self, output_dir, app_client):
+        state = _get_app_state(app_client.app)
+        # Flag the processing state as running without actually starting
+        # a background thread; the route should refuse to start a second.
+        state.proc.running = True
+        try:
+            resp = app_client.post("/api/process", json={
+                # folder doesn't have to exist — the 409 fires before any
+                # filesystem check.
+                "folder": str(output_dir),
+                "sensitivity": 1.0,
+            })
+        finally:
+            state.proc.running = False
+        assert resp.status_code == 409
+        assert "progress" in resp.json()["detail"].lower()
+
+
+class TestEncodeAlreadyRunning409:
+    def test_encode_409_when_already_running(self, output_dir, app_client):
+        state = _get_app_state(app_client.app)
+        state.enc.running = True
+        try:
+            resp = app_client.post("/api/encode", json={
+                "clips": [{"video_stem": "any", "filename": "any.mp4"}],
+                "preset": "original",
+            })
+        finally:
+            state.enc.running = False
+        assert resp.status_code == 409
+        assert "progress" in resp.json()["detail"].lower()
+
+
+class TestCompilationAlreadyRunning409:
+    def test_compilation_409_when_already_running(self, output_dir, app_client):
+        state = _get_app_state(app_client.app)
+        state.comp.running = True
+        try:
+            resp = app_client.post("/api/compilation", json={
+                "clips": [
+                    {"video_stem": "a", "filename": "1.mp4"},
+                    {"video_stem": "a", "filename": "2.mp4"},
+                ],
+                "transition": "cut",
+            })
+        finally:
+            state.comp.running = False
+        assert resp.status_code == 409
+        assert "progress" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

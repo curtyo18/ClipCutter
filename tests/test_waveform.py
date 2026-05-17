@@ -1,5 +1,10 @@
 """Tests for the waveform API endpoint."""
 
+import json
+import subprocess
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 from tests.conftest import create_pending_clip, save_test_metadata
 
 
@@ -82,6 +87,87 @@ class TestWaveformEndpoint:
     def test_waveform_404_for_missing_clip(self, output_dir, app_client):
         resp = app_client.get("/api/waveform/noexist/fake.mp4")
         assert resp.status_code == 404
+
+
+class TestWaveformErrorPaths:
+    """The waveform route maps three failure modes to HTTP 500:
+      - ffmpeg returns non-zero (audio extraction failed)
+      - ffmpeg returns zero but no audio data (silent / unreadable)
+      - ffmpeg call times out (subprocess.TimeoutExpired)
+    Each branch is exercised by mocking subprocess.run so we don't depend
+    on a real ffmpeg binary being on PATH."""
+
+    def _setup_pending_stub(self, output_dir: Path, stem: str, filename: str) -> Path:
+        """Write a stub clip (not a valid mp4) + metadata so the route
+        passes the existence check. The downstream ffmpeg call is mocked,
+        so the stub bytes never get parsed."""
+        pending_dir = output_dir / "clips" / "pending" / stem
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        clip_path = pending_dir / filename
+        clip_path.write_bytes(b"stub-bytes")
+
+        meta_dir = output_dir / "metadata"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / f"{stem}_clips.json").write_text(json.dumps({
+            "source_video": f"/fake/{stem}.mp4",
+            "processed_at": "2026-01-01T00:00:00",
+            "clip_count": 1,
+            "clips": [{
+                "filename": filename,
+                "source_video": f"/fake/{stem}.mp4",
+                "start_time": 0.0, "end_time": 1.0, "duration": 1.0,
+                "detection_reasons": ["volume_spike"], "confidence": 0.8,
+                "status": "pending",
+            }],
+        }), encoding="utf-8")
+        return clip_path
+
+    def test_ffmpeg_nonzero_returns_500(self, output_dir, app_client):
+        """If ffmpeg exits non-zero (corrupt input, decoder error), the
+        route returns 500 with a clear "extraction failed" message rather
+        than an unhandled stack trace."""
+        stem = "wf_fail"
+        self._setup_pending_stub(output_dir, stem, "clip_001.mp4")
+
+        fake_result = MagicMock(returncode=1, stdout=b"", stderr=b"ffmpeg error")
+        with patch(
+            "clipcutter.routes.review.subprocess.run", return_value=fake_result,
+        ):
+            resp = app_client.get(f"/api/waveform/{stem}/clip_001.mp4")
+        assert resp.status_code == 500
+        assert "extraction failed" in resp.json()["detail"].lower()
+
+    def test_ffmpeg_returns_no_audio_returns_500(self, output_dir, app_client):
+        """ffmpeg succeeded (returncode=0) but produced zero bytes — e.g.
+        the input has no audio track. Route maps this to 500 with a
+        distinct "no audio data" message."""
+        stem = "wf_noaudio"
+        self._setup_pending_stub(output_dir, stem, "clip_001.mp4")
+
+        fake_result = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        with patch(
+            "clipcutter.routes.review.subprocess.run", return_value=fake_result,
+        ):
+            resp = app_client.get(f"/api/waveform/{stem}/clip_001.mp4")
+        assert resp.status_code == 500
+        assert "no audio" in resp.json()["detail"].lower()
+
+    def test_ffmpeg_timeout_returns_500(self, output_dir, app_client):
+        """If ffmpeg pins (e.g. corrupt header, network input), the
+        subprocess.run timeout fires and the route surfaces a 500 with
+        a "timed out" message rather than hanging the request thread."""
+        stem = "wf_timeout"
+        self._setup_pending_stub(output_dir, stem, "clip_001.mp4")
+
+        def raise_timeout(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=30)
+
+        with patch(
+            "clipcutter.routes.review.subprocess.run", side_effect=raise_timeout,
+        ):
+            resp = app_client.get(f"/api/waveform/{stem}/clip_001.mp4")
+        assert resp.status_code == 500
+        assert "timed out" in resp.json()["detail"].lower()
 
 
 class TestClipsEndpointHighlightRegions:

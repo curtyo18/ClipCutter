@@ -369,6 +369,137 @@ class TestCancelRoute:
         assert state.upl.snapshot()["cancelled"] is True
 
 
+class TestCancelRouteEndToEnd:
+    """The end-to-end pipeline: POST /api/youtube/upload kicks off the
+    batch worker thread; POST /api/youtube/upload/cancel sets
+    state.upl.cancel_event; the worker (which passes that same event into
+    upload_video) sees it and surfaces cancelled=True back to AppState.
+
+    This is the contract the Task 9 work established: the cancel route is
+    not just a flag-flip — it must actually reach a long-running upload
+    via the shared event object and abort it without finishing the
+    current clip."""
+
+    def test_cancel_route_aborts_inflight_upload_via_event(
+        self, output_dir, app_client, tmp_path,
+    ):
+        import json
+        import time
+        from clipcutter.config import YOUTUBE_CREDENTIALS_FILE
+
+        # 1) Seed a real (loadable) creds file so the upload route doesn't
+        #    bail with 401 before the worker thread starts.
+        creds_path = output_dir / YOUTUBE_CREDENTIALS_FILE
+        creds_path.parent.mkdir(parents=True, exist_ok=True)
+        creds_path.write_text(json.dumps({
+            "access_token": "a", "refresh_token": "r", "token_expiry": None,
+            "client_id": "cid", "client_secret": "csec",
+        }), encoding="utf-8")
+
+        # 2) Seed a kept clip file the route path-validates and tries to
+        #    upload. The contents don't matter — upload_video is mocked.
+        stem = "ytcancel"
+        filename = "clip_001.mp4"
+        kept_dir = output_dir / "clips" / "kept" / stem
+        kept_dir.mkdir(parents=True, exist_ok=True)
+        (kept_dir / filename).write_bytes(b"stub-kept-bytes")
+        # Metadata so duplicate-detection / encoded-resolve don't blow up.
+        meta_dir = output_dir / "metadata"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / f"{stem}_clips.json").write_text(json.dumps({
+            "source_video": f"/fake/{stem}.mp4",
+            "processed_at": "2026-01-01T00:00:00",
+            "clip_count": 1,
+            "clips": [{
+                "filename": filename,
+                "source_video": f"/fake/{stem}.mp4",
+                "start_time": 0.0, "end_time": 5.0, "duration": 5.0,
+                "detection_reasons": ["volume_spike"], "confidence": 0.8,
+                "status": "kept",
+            }],
+        }), encoding="utf-8")
+
+        # 3) Capture the cancel_event passed into upload_video, and block
+        #    in the fake upload until it gets set. This way we can prove
+        #    the route's cancel signal reached the upload worker mid-loop.
+        captured: dict = {}
+        upload_seen_cancel = threading.Event()
+
+        def fake_upload_video(
+            *, creds, file_path, title, description, tags, category_id,
+            privacy, progress_callback=None, cancel_event=None,
+            creds_path=None,
+        ):
+            # Stash the event for later assertion (it must be the SAME
+            # object the cancel route flips — that's the integration contract).
+            captured["cancel_event"] = cancel_event
+            # Block until the cancel event fires. The route's mid-loop
+            # check would do the same; the fake stands in for the
+            # next_chunk loop so the test doesn't have to mock googleapi.
+            if cancel_event is not None and cancel_event.wait(timeout=5.0):
+                upload_seen_cancel.set()
+                return UploadResult(success=False, cancelled=True)
+            return UploadResult(
+                success=True, video_id="X", url="https://youtu.be/X",
+            )
+
+        with patch(
+            "clipcutter.youtube.upload_video", side_effect=fake_upload_video,
+        ):
+            # 4) Kick off the batch upload.
+            resp = app_client.post("/api/youtube/upload", json={
+                "clips": [{
+                    "video_stem": stem,
+                    "filename": filename,
+                    "use_encoded": False,
+                    "title": "Test", "description": "", "tags": [],
+                    "category_id": "20", "privacy": "private",
+                }],
+            })
+            assert resp.status_code == 200, resp.text
+
+            # Wait until upload_video is actually inside the loop (so the
+            # cancel race window is real, not "cancel before start"). The
+            # fake stores cancel_event the moment it's called.
+            deadline = time.time() + 5.0
+            while "cancel_event" not in captured and time.time() < deadline:
+                time.sleep(0.02)
+            assert "cancel_event" in captured, (
+                "upload_video was never called before timeout — "
+                "the route never reached the worker loop"
+            )
+
+            # 5) Fire the cancel route. This is the integration contract:
+            #    the route flips state.upl.cancel_event, which must be the
+            #    SAME object the worker passed to upload_video.
+            cancel_resp = app_client.post("/api/youtube/upload/cancel")
+            assert cancel_resp.status_code == 200
+
+            # 6) The fake upload's .wait() returns True; it sets the
+            #    upload_seen_cancel event before returning. Wait for it.
+            assert upload_seen_cancel.wait(timeout=5.0), (
+                "upload_video did not observe the cancel event — "
+                "the route's event and the worker's event are not the same"
+            )
+
+        # The route's event MUST be the exact same Event object the
+        # worker thread passed in (not a copy / not a different field).
+        state = _recover_app_state(app_client.app)
+        assert captured["cancel_event"] is state.upl.cancel_event
+
+        # Wait for the worker thread to finish() so the snapshot reflects
+        # the cancelled state.
+        deadline = time.time() + 5.0
+        while state.upl.snapshot()["running"] and time.time() < deadline:
+            time.sleep(0.02)
+        snap = state.upl.snapshot()
+        assert snap["running"] is False
+        assert snap["cancelled"] is True
+        # Cancelled mid-batch: no errors recorded (cancel is not an
+        # error — the unstarted work is just unstarted).
+        assert snap["errors"] == []
+
+
 # ---------------------------------------------------------------------------
 # httplib2 timeout constant — sanity check that it's plumbed at all.
 # ---------------------------------------------------------------------------
