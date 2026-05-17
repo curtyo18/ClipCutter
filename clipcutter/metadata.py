@@ -155,75 +155,68 @@ def load_metadata_dict(metadata_path: Path) -> dict:
     return json.loads(metadata_path.read_text(encoding="utf-8"))
 
 
-def update_clip_status(metadata_path: Path, filename: str, status: str) -> bool:
-    """Update a single clip's status. Returns True if the filename was found."""
-    def mutator(data: dict) -> bool:
+def _update_clip_by_filename(metadata_path: Path, filename: str,
+                             mutator: Callable[[dict], None]) -> bool:
+    """Find clip by filename, apply mutator(clip) in place, atomic-write.
+
+    Shared find-and-mutate boilerplate for the public ``update_clip_*`` /
+    ``clear_clip_encoding`` helpers. Returns True if the filename was found
+    (and the write happened), False otherwise.
+    """
+    def find_and_apply(data: dict) -> bool:
         for clip in data["clips"]:
             if clip["filename"] == filename:
-                clip["status"] = status
+                mutator(clip)
                 return True
         return False
-    return mutate_metadata(metadata_path, mutator)
+    return mutate_metadata(metadata_path, find_and_apply)
+
+
+def update_clip_status(metadata_path: Path, filename: str, status: str) -> bool:
+    """Update a single clip's status. Returns True if the filename was found."""
+    return _update_clip_by_filename(
+        metadata_path, filename,
+        lambda clip: clip.__setitem__("status", status))
 
 
 def update_clip_custom_name(metadata_path: Path, filename: str,
                             custom_name: str) -> bool:
     """Update a single clip's custom name. Returns True if the filename was found."""
-    def mutator(data: dict) -> bool:
-        for clip in data["clips"]:
-            if clip["filename"] == filename:
-                clip["custom_name"] = custom_name
-                return True
-        return False
-    return mutate_metadata(metadata_path, mutator)
+    return _update_clip_by_filename(
+        metadata_path, filename,
+        lambda clip: clip.__setitem__("custom_name", custom_name))
 
 
 def update_clip_encoding(metadata_path: Path, filename: str,
                          encoded_filename: str, preset: str) -> bool:
     """Update a single clip's encoding info. Returns True if the filename was found."""
-    def mutator(data: dict) -> bool:
-        for clip in data["clips"]:
-            if clip["filename"] == filename:
-                clip["encoded_filename"] = encoded_filename
-                clip["encoding_preset"] = preset
-                return True
-        return False
-    return mutate_metadata(metadata_path, mutator)
+    def mutator(clip: dict) -> None:
+        clip["encoded_filename"] = encoded_filename
+        clip["encoding_preset"] = preset
+    return _update_clip_by_filename(metadata_path, filename, mutator)
 
 
 def clear_clip_encoding(metadata_path: Path, filename: str) -> bool:
     """Clear encoding info for a clip. Returns True if the filename was found."""
-    def mutator(data: dict) -> bool:
-        for clip in data["clips"]:
-            if clip["filename"] == filename:
-                clip["encoded_filename"] = None
-                clip["encoding_preset"] = None
-                return True
-        return False
-    return mutate_metadata(metadata_path, mutator)
+    def mutator(clip: dict) -> None:
+        clip["encoded_filename"] = None
+        clip["encoding_preset"] = None
+    return _update_clip_by_filename(metadata_path, filename, mutator)
 
 
 def update_clip_youtube(metadata_path: Path, filename: str,
                         video_id: str, url: str,
                         status: str = "uploaded") -> bool:
     """Update a single clip's YouTube upload info. Returns True if the filename was found."""
-    def mutator(data: dict) -> bool:
-        for clip in data["clips"]:
-            if clip["filename"] == filename:
-                clip["youtube_video_id"] = video_id
-                clip["youtube_url"] = url
-                clip["youtube_upload_status"] = status
-                return True
-        return False
-    return mutate_metadata(metadata_path, mutator)
+    def mutator(clip: dict) -> None:
+        clip["youtube_video_id"] = video_id
+        clip["youtube_url"] = url
+        clip["youtube_upload_status"] = status
+    return _update_clip_by_filename(metadata_path, filename, mutator)
 
 
 def update_clip_duration(metadata_path: Path, filename: str, duration: float) -> bool:
     """Update a single clip's duration. Returns True if the filename was found."""
-    def mutator(data: dict) -> bool:
-        for clip in data["clips"]:
-            if clip["filename"] == filename:
-                clip["duration"] = round(duration, 4)
-                return True
-        return False
-    return mutate_metadata(metadata_path, mutator)
+    return _update_clip_by_filename(
+        metadata_path, filename,
+        lambda clip: clip.__setitem__("duration", round(duration, 4)))
