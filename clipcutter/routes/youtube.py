@@ -266,7 +266,6 @@ if (window.opener) {
 
     @router.post("/api/youtube/upload")
     def start_youtube_upload(req: YouTubeBatchUploadRequest):
-        import threading
         if state.upl.running:
             raise HTTPException(409, "Upload already in progress")
 
